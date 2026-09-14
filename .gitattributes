@@ -1,0 +1,3 @@
+# Batchdateien brauchen unter Windows CRLF-Zeilenenden
+*.bat -text
+*.md text eol=lf
