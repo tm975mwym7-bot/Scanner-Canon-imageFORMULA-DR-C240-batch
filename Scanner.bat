@@ -30,6 +30,11 @@ endlocal & exit /b 0
 #~PSSTART~
 # ===========================================================================
 #  Oberflaeche (Windows Forms) fuer Scan.bat
+#
+#  Kundenansicht: nur "was wird gescannt" und die Schaltflaeche Scannen.
+#  Alles zur Einrichtung (Scanner, Aufloesung, Zielordner, Protokoll) liegt
+#  im Servicebereich - erreichbar ueber Strg+Alt+S oder Doppelklick auf das
+#  Logo, geschuetzt durch das Servicekennwort.
 # ===========================================================================
 $ErrorActionPreference = 'Stop'
 
@@ -39,11 +44,49 @@ $script:Strasse    = 'Anderslebener Str. 40'
 $script:Ort        = '39387 Oschersleben'
 $script:Jahr       = '2026'
 
-$script:EigenerPfad  = $env:GUI_SELF
-$script:Ordner       = Split-Path -Parent $script:EigenerPfad
-$script:ScanBat      = [IO.Path]::Combine($script:Ordner, 'Scan.bat')
-$script:EinstOrdner  = [IO.Path]::Combine($env:APPDATA, 'Scan-DR-C240')
-$script:EinstDatei   = [IO.Path]::Combine($script:EinstOrdner, 'einstellungen.json')
+# --- Servicekennwort (SHA-256). Standard: IDO-Service -----------------------
+# Aenderbar ueber "Kennwort aendern" im Servicebereich.
+$script:KennwortHash = 'c94d0144f7b6b395083a18da0e53b2483626fd01e98ed67c3cbb5b1cd6a3fdb3'
+
+$script:EigenerPfad = $env:GUI_SELF
+$script:Ordner      = Split-Path -Parent $script:EigenerPfad
+$script:ScanBat     = [IO.Path]::Combine($script:Ordner, 'Scan.bat')
+$script:EinstOrdner = [IO.Path]::Combine($env:APPDATA, 'Scan-DR-C240')
+
+# Einstellungen liegen bevorzugt beim Programm (gilt dann fuer alle Benutzer
+# des Rechners); ist der Ordner schreibgeschuetzt, weichen wir ins Profil aus.
+$script:EinstBeimProgramm = [IO.Path]::Combine($script:Ordner, 'einstellungen.json')
+$script:EinstImProfil     = [IO.Path]::Combine($script:EinstOrdner, 'einstellungen.json')
+$script:EinstDatei        = $script:EinstBeimProgramm
+if (-not (Test-Path -LiteralPath $script:EinstBeimProgramm) -and (Test-Path -LiteralPath $script:EinstImProfil)) {
+    $script:EinstDatei = $script:EinstImProfil
+}
+
+# ---------------------------------------------------------------------------
+# Kennwort
+# ---------------------------------------------------------------------------
+function Get-TextHash([string]$text) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))
+    } finally { $sha.Dispose() }
+    return (-join ($bytes | ForEach-Object { $_.ToString('x2') }))
+}
+
+function Test-Kennwort([string]$eingabe) {
+    if (-not $eingabe) { return $false }
+    return ((Get-TextHash $eingabe) -eq $script:KennwortHash)
+}
+
+# neuen Hash in diese Datei zurueckschreiben (Zeilenenden bleiben erhalten)
+function Set-KennwortHash([string]$neuerHash) {
+    $text = [IO.File]::ReadAllText($script:EigenerPfad, [Text.Encoding]::UTF8)
+    $muster = "(?m)^\`$script:KennwortHash = '[0-9a-fA-F]*'"
+    if ($text -notmatch $muster) { throw 'Die Kennwortzeile wurde in der Datei nicht gefunden.' }
+    $neu = [regex]::Replace($text, $muster, "`$script:KennwortHash = '$neuerHash'", 1)
+    [IO.File]::WriteAllText($script:EigenerPfad, $neu, (New-Object Text.UTF8Encoding($false)))
+    $script:KennwortHash = $neuerHash
+}
 
 # ---------------------------------------------------------------------------
 # Einstellungen laden und sichern
@@ -76,8 +119,8 @@ function Get-Einstellungen {
                 $wert = $gespeichert.$schluessel
                 if ($null -ne $wert -and "$wert" -ne '') { $e[$schluessel] = $wert }
             }
-            $e.Dpi    = [int]$e.Dpi
-            $e.Duplex = [bool]$e.Duplex
+            $e.Dpi     = [int]$e.Dpi
+            $e.Duplex  = [bool]$e.Duplex
             $e.Oeffnen = [bool]$e.Oeffnen
         } catch {
             # beschaedigte Datei: mit den Vorgaben weiterarbeiten
@@ -87,15 +130,19 @@ function Get-Einstellungen {
 }
 
 function Save-Einstellungen($e) {
-    try {
-        if (-not (Test-Path -LiteralPath $script:EinstOrdner)) {
-            New-Item -ItemType Directory -Path $script:EinstOrdner -Force | Out-Null
+    $inhalt = ([pscustomobject]$e) | ConvertTo-Json
+    foreach ($ziel in @($script:EinstDatei, $script:EinstImProfil)) {
+        try {
+            $ordner = Split-Path -Parent $ziel
+            if (-not (Test-Path -LiteralPath $ordner)) { New-Item -ItemType Directory -Path $ordner -Force | Out-Null }
+            Set-Content -LiteralPath $ziel -Value $inhalt -Encoding UTF8
+            $script:EinstDatei = $ziel
+            return $true
+        } catch {
+            continue   # z.B. Programmordner schreibgeschuetzt -> naechster Versuch im Profil
         }
-        ([pscustomobject]$e) | ConvertTo-Json | Set-Content -LiteralPath $script:EinstDatei -Encoding UTF8
-        return $true
-    } catch {
-        return $false
     }
+    return $false
 }
 
 # ---------------------------------------------------------------------------
@@ -187,6 +234,55 @@ function New-SymbolAusBild($bild, [int]$kante) {
 }
 
 # ---------------------------------------------------------------------------
+# Symboldatei (.ico) aus fertigen PNG-Bloecken zusammensetzen
+# ---------------------------------------------------------------------------
+function New-IcoAusPngs([object[]]$pngListe, [int[]]$kanten, [string]$ziel) {
+    $anzahl = $pngListe.Count
+    $strom  = New-Object IO.FileStream($ziel, [IO.FileMode]::Create, [IO.FileAccess]::Write)
+    $s = New-Object IO.BinaryWriter($strom)
+    try {
+        $s.Write([uint16]0)       # reserviert
+        $s.Write([uint16]1)       # Typ 1 = Symbol
+        $s.Write([uint16]$anzahl)
+
+        $offset = 6 + 16 * $anzahl
+        for ($i = 0; $i -lt $anzahl; $i++) {
+            $kante = $kanten[$i]
+            $mass  = 0
+            if ($kante -lt 256) { $mass = $kante }   # 256 wird als 0 eingetragen
+            $s.Write([byte]$mass)                    # Breite
+            $s.Write([byte]$mass)                    # Hoehe
+            $s.Write([byte]0)                        # Farbtabelle
+            $s.Write([byte]0)                        # reserviert
+            $s.Write([uint16]1)                      # Ebenen
+            $s.Write([uint16]32)                     # Bit je Bildpunkt
+            $s.Write([uint32]$pngListe[$i].Length)
+            $s.Write([uint32]$offset)
+            $offset += $pngListe[$i].Length
+        }
+        foreach ($png in $pngListe) { $s.Write($png, 0, $png.Length) }
+    } finally {
+        $s.Dispose(); $strom.Dispose()
+    }
+}
+
+# logo.ico erzeugen (fuer Fenster, Taskleiste und Verknuepfungen)
+function New-LogoSymbol($bild, [string]$ziel) {
+    $kanten = @(16, 24, 32, 48, 64, 128, 256)
+    $pngs = @()
+    foreach ($kante in $kanten) {
+        $quadrat = New-SymbolAusBild $bild $kante
+        try {
+            $speicher = New-Object IO.MemoryStream
+            $quadrat.Save($speicher, [System.Drawing.Imaging.ImageFormat]::Png)
+            $pngs += ,$speicher.ToArray()
+            $speicher.Dispose()
+        } finally { $quadrat.Dispose() }
+    }
+    New-IcoAusPngs $pngs $kanten $ziel
+}
+
+# ---------------------------------------------------------------------------
 # Oberflaeche
 # ---------------------------------------------------------------------------
 Add-Type -AssemblyName System.Windows.Forms
@@ -195,22 +291,26 @@ Add-Type -AssemblyName System.Drawing
 
 $e = Get-Einstellungen
 
+$script:HoeheKunde   = 330
+$script:HoeheService = 700
+
+$firmenBlau = [System.Drawing.Color]::FromArgb(43, 74, 155)
+
 $form                 = New-Object System.Windows.Forms.Form
 $form.Text            = 'Scannen'
-$form.ClientSize      = New-Object System.Drawing.Size(562, 600)
-$form.MinimumSize     = New-Object System.Drawing.Size(578, 560)
+$form.ClientSize      = New-Object System.Drawing.Size(620, $script:HoeheKunde)
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
+$form.MaximizeBox     = $false
 $form.StartPosition   = 'CenterScreen'
 $form.Font            = New-Object System.Drawing.Font('Segoe UI', 9)
 $form.AutoScaleMode   = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.BackColor       = [System.Drawing.Color]::FromArgb(243, 243, 243)
-
-$firmenBlau = [System.Drawing.Color]::FromArgb(43, 74, 155)
+$form.KeyPreview      = $true
 
 # --- Kopfbereich mit Firmenlogo ---------------------------------------------
 $pnlKopf           = New-Object System.Windows.Forms.Panel
 $pnlKopf.Location  = New-Object System.Drawing.Point(0, 0)
-$pnlKopf.Size      = New-Object System.Drawing.Size(562, 72)
-$pnlKopf.Anchor    = 'Top,Left,Right'
+$pnlKopf.Size      = New-Object System.Drawing.Size(620, 72)
 $pnlKopf.BackColor = [System.Drawing.Color]::White
 
 $logoDatei = Get-LogoDatei
@@ -219,20 +319,52 @@ if ($logoDatei) {
     try { $logoBild = Get-LogoBild $logoDatei } catch { $logoBild = $null }
 }
 
+# Fenstersymbol: vorhandene logo.ico nutzen, sonst eine aus dem Logo erzeugen
+$script:IcoPfad = $null
+$icoImOrdner = [IO.Path]::Combine($script:Ordner, 'logo.ico')
+$icoErsatz   = [IO.Path]::Combine($script:EinstOrdner, 'logo.ico')
+try {
+    if ($logoBild) {
+        $zielIco  = $icoImOrdner
+        $neuBauen = $true
+        if (Test-Path -LiteralPath $zielIco) {
+            $neuBauen = (Get-Item -LiteralPath $zielIco).LastWriteTime -lt (Get-Item -LiteralPath $logoDatei).LastWriteTime
+        }
+        if ($neuBauen) {
+            try {
+                New-LogoSymbol $logoBild $zielIco
+            } catch {
+                # Programmordner schreibgeschuetzt: Symbol neben den Einstellungen ablegen
+                if (-not (Test-Path -LiteralPath $script:EinstOrdner)) {
+                    New-Item -ItemType Directory -Path $script:EinstOrdner -Force | Out-Null
+                }
+                New-LogoSymbol $logoBild $icoErsatz
+                $zielIco = $icoErsatz
+            }
+        }
+        $script:IcoPfad = $zielIco
+    } elseif (Test-Path -LiteralPath $icoImOrdner) {
+        $script:IcoPfad = $icoImOrdner
+    }
+    if ($script:IcoPfad) { $form.Icon = New-Object System.Drawing.Icon($script:IcoPfad) }
+} catch {
+    if ($logoBild) {
+        try { $form.Icon = [System.Drawing.Icon]::FromHandle((New-SymbolAusBild $logoBild 32).GetHicon()) } catch { }
+    }
+}
+
 if ($logoBild) {
-    $picLogo           = New-Object System.Windows.Forms.PictureBox
-    $picLogo.Location  = New-Object System.Drawing.Point(16, 11)
-    $picLogo.Size      = New-Object System.Drawing.Size(196, 50)
-    $picLogo.SizeMode  = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
-    $picLogo.Image     = $logoBild
+    $picLogo          = New-Object System.Windows.Forms.PictureBox
+    $picLogo.Location = New-Object System.Drawing.Point(16, 11)
+    $picLogo.Size     = New-Object System.Drawing.Size(210, 50)
+    $picLogo.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
+    $picLogo.Image    = $logoBild
     $pnlKopf.Controls.Add($picLogo)
-    try { $form.Icon = [System.Drawing.Icon]::FromHandle((New-SymbolAusBild $logoBild 32).GetHicon()) } catch { }
 } else {
-    # ohne Logodatei bleibt der Firmenname als Schriftzug stehen
     $lblLogo           = New-Object System.Windows.Forms.Label
     $lblLogo.Text      = $script:Firma
     $lblLogo.Location  = New-Object System.Drawing.Point(16, 18)
-    $lblLogo.Size      = New-Object System.Drawing.Size(196, 36)
+    $lblLogo.AutoSize  = $true
     $lblLogo.Font      = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
     $lblLogo.ForeColor = $firmenBlau
     $pnlKopf.Controls.Add($lblLogo)
@@ -240,205 +372,246 @@ if ($logoBild) {
 
 $lblTitel           = New-Object System.Windows.Forms.Label
 $lblTitel.Text      = 'Scannen'
-$lblTitel.Location  = New-Object System.Drawing.Point(228, 13)
-$lblTitel.Size      = New-Object System.Drawing.Size(320, 26)
+$lblTitel.Location  = New-Object System.Drawing.Point(244, 13)
+$lblTitel.AutoSize  = $true
 $lblTitel.Font      = New-Object System.Drawing.Font('Segoe UI', 13, [System.Drawing.FontStyle]::Bold)
 $lblTitel.ForeColor = $firmenBlau
 
 $lblUnter           = New-Object System.Windows.Forms.Label
 $lblUnter.Text      = 'Canon imageFORMULA DR-C240'
-$lblUnter.Location  = New-Object System.Drawing.Point(230, 41)
-$lblUnter.Size      = New-Object System.Drawing.Size(320, 20)
+$lblUnter.Location  = New-Object System.Drawing.Point(246, 42)
+$lblUnter.AutoSize  = $true
 $lblUnter.ForeColor = [System.Drawing.Color]::DimGray
 
 $pnlKopf.Controls.AddRange(@($lblTitel, $lblUnter))
 
 $lblLinie           = New-Object System.Windows.Forms.Label
 $lblLinie.Location  = New-Object System.Drawing.Point(0, 72)
-$lblLinie.Size      = New-Object System.Drawing.Size(562, 1)
-$lblLinie.Anchor    = 'Top,Left,Right'
+$lblLinie.Size      = New-Object System.Drawing.Size(620, 1)
 $lblLinie.BackColor = [System.Drawing.Color]::FromArgb(214, 214, 214)
 
 $form.Controls.AddRange(@($pnlKopf, $lblLinie))
 
-# --- Scannerauswahl ---------------------------------------------------------
-$lblGeraet          = New-Object System.Windows.Forms.Label
-$lblGeraet.Text     = 'Scanner:'
-$lblGeraet.Location = New-Object System.Drawing.Point(18, 93)
-$lblGeraet.Size     = New-Object System.Drawing.Size(70, 20)
-
-$cmbGeraet          = New-Object System.Windows.Forms.ComboBox
-$cmbGeraet.Location = New-Object System.Drawing.Point(90, 89)
-$cmbGeraet.Size     = New-Object System.Drawing.Size(330, 24)
-$cmbGeraet.DropDownStyle = 'DropDownList'
-$cmbGeraet.Anchor   = 'Top,Left,Right'
-
-$btnAktual          = New-Object System.Windows.Forms.Button
-$btnAktual.Text     = 'Suchen'
-$btnAktual.Location = New-Object System.Drawing.Point(430, 88)
-$btnAktual.Size     = New-Object System.Drawing.Size(110, 26)
-$btnAktual.Anchor   = 'Top,Right'
-
-$form.Controls.AddRange(@($lblGeraet, $cmbGeraet, $btnAktual))
-
-# --- Gruppe: Ausgabe --------------------------------------------------------
-$grpAusgabe          = New-Object System.Windows.Forms.GroupBox
-$grpAusgabe.Text     = ' Ausgabe '
-$grpAusgabe.Location = New-Object System.Drawing.Point(18, 124)
-$grpAusgabe.Size     = New-Object System.Drawing.Size(522, 105)
-$grpAusgabe.Anchor   = 'Top,Left,Right'
+# ===========================================================================
+#  Kundenansicht: was wird gescannt, und die Schaltflaeche Scannen
+# ===========================================================================
+$grpWas          = New-Object System.Windows.Forms.GroupBox
+$grpWas.Text     = ' Was soll gescannt werden? '
+$grpWas.Location = New-Object System.Drawing.Point(18, 88)
+$grpWas.Size     = New-Object System.Drawing.Size(584, 88)
 
 $radPdf          = New-Object System.Windows.Forms.RadioButton
-$radPdf.Text     = 'PDF (mehrseitig)'
-$radPdf.Location = New-Object System.Drawing.Point(15, 25)
-$radPdf.Size     = New-Object System.Drawing.Size(140, 22)
+$radPdf.Text     = 'PDF (alle Blätter in einer Datei)'
+$radPdf.Location = New-Object System.Drawing.Point(18, 26)
+$radPdf.AutoSize = $true
 
 $radBild          = New-Object System.Windows.Forms.RadioButton
 $radBild.Text     = 'Bilddateien'
-$radBild.Location = New-Object System.Drawing.Point(165, 25)
-$radBild.Size     = New-Object System.Drawing.Size(100, 22)
+$radBild.Location = New-Object System.Drawing.Point(300, 26)
+$radBild.AutoSize = $true
 
 $cmbBildart          = New-Object System.Windows.Forms.ComboBox
-$cmbBildart.Location = New-Object System.Drawing.Point(268, 24)
+$cmbBildart.Location = New-Object System.Drawing.Point(404, 24)
 $cmbBildart.Size     = New-Object System.Drawing.Size(80, 24)
 $cmbBildart.DropDownStyle = 'DropDownList'
 [void]$cmbBildart.Items.AddRange(@('JPG', 'PNG', 'TIF'))
 
+$chkDuplex          = New-Object System.Windows.Forms.CheckBox
+$chkDuplex.Text     = 'Vorder- und Rückseite scannen'
+$chkDuplex.Location = New-Object System.Drawing.Point(18, 56)
+$chkDuplex.AutoSize = $true
+
+$grpWas.Controls.AddRange(@($radPdf, $radBild, $cmbBildart, $chkDuplex))
+$form.Controls.Add($grpWas)
+
+$btnScan          = New-Object System.Windows.Forms.Button
+$btnScan.Text     = 'Scannen'
+$btnScan.Location = New-Object System.Drawing.Point(18, 188)
+$btnScan.Size     = New-Object System.Drawing.Size(220, 48)
+$btnScan.Font     = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+
+$btnAbbruch          = New-Object System.Windows.Forms.Button
+$btnAbbruch.Text     = 'Abbrechen'
+$btnAbbruch.Location = New-Object System.Drawing.Point(246, 188)
+$btnAbbruch.Size     = New-Object System.Drawing.Size(120, 48)
+$btnAbbruch.Enabled  = $false
+
+$btnZeigen          = New-Object System.Windows.Forms.Button
+$btnZeigen.Text     = 'Ergebnis zeigen'
+$btnZeigen.Location = New-Object System.Drawing.Point(374, 188)
+$btnZeigen.Size     = New-Object System.Drawing.Size(150, 48)
+$btnZeigen.Enabled  = $false
+
+$btnOrdner          = New-Object System.Windows.Forms.Button
+$btnOrdner.Text     = 'Ordner'
+$btnOrdner.Location = New-Object System.Drawing.Point(532, 188)
+$btnOrdner.Size     = New-Object System.Drawing.Size(70, 48)
+
+$form.Controls.AddRange(@($btnScan, $btnAbbruch, $btnZeigen, $btnOrdner))
+
+$lblStatus           = New-Object System.Windows.Forms.Label
+$lblStatus.Text      = 'Bereit.'
+$lblStatus.Location  = New-Object System.Drawing.Point(18, 248)
+$lblStatus.Size      = New-Object System.Drawing.Size(584, 36)
+$lblStatus.Font      = New-Object System.Drawing.Font('Segoe UI', 9.5)
+$form.Controls.Add($lblStatus)
+
+$lblLinie2           = New-Object System.Windows.Forms.Label
+$lblLinie2.Location  = New-Object System.Drawing.Point(0, 292)
+$lblLinie2.Size      = New-Object System.Drawing.Size(620, 1)
+$lblLinie2.BackColor = [System.Drawing.Color]::FromArgb(214, 214, 214)
+$form.Controls.Add($lblLinie2)
+
+# ===========================================================================
+#  Servicebereich (nur nach Kennworteingabe sichtbar)
+# ===========================================================================
+$pnlService          = New-Object System.Windows.Forms.Panel
+$pnlService.Location = New-Object System.Drawing.Point(0, 296)
+$pnlService.Size     = New-Object System.Drawing.Size(620, 366)
+$pnlService.Visible  = $false
+
+$lblService          = New-Object System.Windows.Forms.Label
+$lblService.Text     = 'Service - Einrichtung durch die ' + $script:Firma
+$lblService.Location = New-Object System.Drawing.Point(18, 6)
+$lblService.AutoSize = $true
+$lblService.Font     = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+$lblService.ForeColor = $firmenBlau
+
+# --- Gerät und Qualität -----------------------------------------------------
+$grpGeraet          = New-Object System.Windows.Forms.GroupBox
+$grpGeraet.Text     = ' Gerät und Qualität '
+$grpGeraet.Location = New-Object System.Drawing.Point(18, 28)
+$grpGeraet.Size     = New-Object System.Drawing.Size(584, 92)
+
+$lblGeraet          = New-Object System.Windows.Forms.Label
+$lblGeraet.Text     = 'Scanner:'
+$lblGeraet.Location = New-Object System.Drawing.Point(15, 26)
+$lblGeraet.AutoSize = $true
+
+$cmbGeraet          = New-Object System.Windows.Forms.ComboBox
+$cmbGeraet.Location = New-Object System.Drawing.Point(90, 22)
+$cmbGeraet.Size     = New-Object System.Drawing.Size(352, 24)
+$cmbGeraet.DropDownStyle = 'DropDownList'
+
+$btnAktual          = New-Object System.Windows.Forms.Button
+$btnAktual.Text     = 'Suchen'
+$btnAktual.Location = New-Object System.Drawing.Point(450, 21)
+$btnAktual.Size     = New-Object System.Drawing.Size(118, 26)
+
 $lblFarbe          = New-Object System.Windows.Forms.Label
 $lblFarbe.Text     = 'Farbe:'
-$lblFarbe.Location = New-Object System.Drawing.Point(15, 66)
-$lblFarbe.Size     = New-Object System.Drawing.Size(50, 20)
+$lblFarbe.Location = New-Object System.Drawing.Point(15, 60)
+$lblFarbe.AutoSize = $true
 
 $cmbFarbe          = New-Object System.Windows.Forms.ComboBox
-$cmbFarbe.Location = New-Object System.Drawing.Point(68, 62)
+$cmbFarbe.Location = New-Object System.Drawing.Point(68, 56)
 $cmbFarbe.Size     = New-Object System.Drawing.Size(120, 24)
 $cmbFarbe.DropDownStyle = 'DropDownList'
-[void]$cmbFarbe.Items.AddRange(@('Farbe', 'Graustufen', 'Schwarzweiss'))
+[void]$cmbFarbe.Items.AddRange(@('Farbe', 'Graustufen', 'Schwarzweiß'))
 
 $lblDpi          = New-Object System.Windows.Forms.Label
-$lblDpi.Text     = 'Aufloesung:'
-$lblDpi.Location = New-Object System.Drawing.Point(205, 66)
-$lblDpi.Size     = New-Object System.Drawing.Size(75, 20)
+$lblDpi.Text     = 'Auflösung:'
+$lblDpi.Location = New-Object System.Drawing.Point(210, 60)
+$lblDpi.AutoSize = $true
 
 $cmbDpi          = New-Object System.Windows.Forms.ComboBox
-$cmbDpi.Location = New-Object System.Drawing.Point(282, 62)
+$cmbDpi.Location = New-Object System.Drawing.Point(292, 56)
 $cmbDpi.Size     = New-Object System.Drawing.Size(70, 24)
 $cmbDpi.DropDownStyle = 'DropDownList'
 [void]$cmbDpi.Items.AddRange(@('150', '200', '300', '400', '600'))
 
 $lblDpiEinheit          = New-Object System.Windows.Forms.Label
 $lblDpiEinheit.Text     = 'dpi'
-$lblDpiEinheit.Location = New-Object System.Drawing.Point(357, 66)
-$lblDpiEinheit.Size     = New-Object System.Drawing.Size(30, 20)
+$lblDpiEinheit.Location = New-Object System.Drawing.Point(367, 60)
+$lblDpiEinheit.AutoSize = $true
 
-$chkDuplex          = New-Object System.Windows.Forms.CheckBox
-$chkDuplex.Text     = 'Vorder- und Rueckseite'
-$chkDuplex.Location = New-Object System.Drawing.Point(390, 64)
-$chkDuplex.Size     = New-Object System.Drawing.Size(170, 22)
+$grpGeraet.Controls.AddRange(@($lblGeraet, $cmbGeraet, $btnAktual, $lblFarbe, $cmbFarbe,
+                               $lblDpi, $cmbDpi, $lblDpiEinheit))
 
-$grpAusgabe.Controls.AddRange(@($radPdf, $radBild, $cmbBildart, $lblFarbe, $cmbFarbe,
-                                $lblDpi, $cmbDpi, $lblDpiEinheit, $chkDuplex))
-$form.Controls.Add($grpAusgabe)
-
-# --- Gruppe: Ablage ---------------------------------------------------------
+# --- Ablage -----------------------------------------------------------------
 $grpAblage          = New-Object System.Windows.Forms.GroupBox
 $grpAblage.Text     = ' Ablage '
-$grpAblage.Location = New-Object System.Drawing.Point(18, 239)
-$grpAblage.Size     = New-Object System.Drawing.Size(522, 120)
-$grpAblage.Anchor   = 'Top,Left,Right'
+$grpAblage.Location = New-Object System.Drawing.Point(18, 128)
+$grpAblage.Size     = New-Object System.Drawing.Size(584, 116)
 
 $lblZiel          = New-Object System.Windows.Forms.Label
 $lblZiel.Text     = 'Ordner:'
 $lblZiel.Location = New-Object System.Drawing.Point(15, 28)
-$lblZiel.Size     = New-Object System.Drawing.Size(70, 20)
+$lblZiel.AutoSize = $true
 
 $txtZiel          = New-Object System.Windows.Forms.TextBox
 $txtZiel.Location = New-Object System.Drawing.Point(88, 25)
-$txtZiel.Size     = New-Object System.Drawing.Size(320, 24)
-$txtZiel.Anchor   = 'Top,Left,Right'
+$txtZiel.Size     = New-Object System.Drawing.Size(380, 24)
 
 $btnZiel          = New-Object System.Windows.Forms.Button
-$btnZiel.Text     = 'Waehlen'
-$btnZiel.Location = New-Object System.Drawing.Point(415, 24)
-$btnZiel.Size     = New-Object System.Drawing.Size(90, 26)
-$btnZiel.Anchor   = 'Top,Right'
+$btnZiel.Text     = 'Wählen'
+$btnZiel.Location = New-Object System.Drawing.Point(476, 24)
+$btnZiel.Size     = New-Object System.Drawing.Size(92, 26)
 
 $lblName          = New-Object System.Windows.Forms.Label
 $lblName.Text     = 'Name:'
 $lblName.Location = New-Object System.Drawing.Point(15, 62)
-$lblName.Size     = New-Object System.Drawing.Size(70, 20)
+$lblName.AutoSize = $true
 
 $txtName          = New-Object System.Windows.Forms.TextBox
 $txtName.Location = New-Object System.Drawing.Point(88, 59)
 $txtName.Size     = New-Object System.Drawing.Size(150, 24)
 
-$lblMuster          = New-Object System.Windows.Forms.Label
-$lblMuster.Location = New-Object System.Drawing.Point(244, 62)
-$lblMuster.Size     = New-Object System.Drawing.Size(265, 20)
+$lblMuster           = New-Object System.Windows.Forms.Label
+$lblMuster.Location  = New-Object System.Drawing.Point(248, 62)
+$lblMuster.Size      = New-Object System.Drawing.Size(320, 20)
 $lblMuster.ForeColor = [System.Drawing.Color]::DimGray
 
 $chkOeffnen          = New-Object System.Windows.Forms.CheckBox
-$chkOeffnen.Text     = 'Ergebnis nach dem Scan oeffnen'
+$chkOeffnen.Text     = 'Ergebnis nach dem Scan öffnen'
 $chkOeffnen.Location = New-Object System.Drawing.Point(88, 90)
-$chkOeffnen.Size     = New-Object System.Drawing.Size(260, 22)
+$chkOeffnen.AutoSize = $true
 
 $grpAblage.Controls.AddRange(@($lblZiel, $txtZiel, $btnZiel, $lblName, $txtName, $lblMuster, $chkOeffnen))
-$form.Controls.Add($grpAblage)
 
-# --- Schaltflaechen ---------------------------------------------------------
-$btnScan          = New-Object System.Windows.Forms.Button
-$btnScan.Text     = 'Scannen'
-$btnScan.Location = New-Object System.Drawing.Point(18, 371)
-$btnScan.Size     = New-Object System.Drawing.Size(150, 38)
-$btnScan.Font     = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+# --- Protokoll --------------------------------------------------------------
+$lblProt          = New-Object System.Windows.Forms.Label
+$lblProt.Text     = 'Protokoll:'
+$lblProt.Location = New-Object System.Drawing.Point(18, 250)
+$lblProt.AutoSize = $true
 
-$btnAbbruch          = New-Object System.Windows.Forms.Button
-$btnAbbruch.Text     = 'Abbrechen'
-$btnAbbruch.Location = New-Object System.Drawing.Point(176, 371)
-$btnAbbruch.Size     = New-Object System.Drawing.Size(110, 38)
-$btnAbbruch.Enabled  = $false
+$txtLog            = New-Object System.Windows.Forms.TextBox
+$txtLog.Location   = New-Object System.Drawing.Point(18, 270)
+$txtLog.Size       = New-Object System.Drawing.Size(584, 66)
+$txtLog.Multiline  = $true
+$txtLog.ReadOnly   = $true
+$txtLog.ScrollBars = 'Vertical'
+$txtLog.BackColor  = [System.Drawing.Color]::White
+$txtLog.Font       = New-Object System.Drawing.Font('Consolas', 9)
 
-$btnZeigen          = New-Object System.Windows.Forms.Button
-$btnZeigen.Text     = 'Ergebnis zeigen'
-$btnZeigen.Location = New-Object System.Drawing.Point(294, 371)
-$btnZeigen.Size     = New-Object System.Drawing.Size(130, 38)
-$btnZeigen.Enabled  = $false
+$btnLink          = New-Object System.Windows.Forms.Button
+$btnLink.Text     = 'Verknüpfung auf dem Desktop'
+$btnLink.Location = New-Object System.Drawing.Point(18, 340)
+$btnLink.Size     = New-Object System.Drawing.Size(210, 26)
 
-$btnOrdner          = New-Object System.Windows.Forms.Button
-$btnOrdner.Text     = 'Ordner'
-$btnOrdner.Location = New-Object System.Drawing.Point(432, 371)
-$btnOrdner.Size     = New-Object System.Drawing.Size(108, 38)
-$btnOrdner.Anchor   = 'Top,Right'
+$btnKennwort          = New-Object System.Windows.Forms.Button
+$btnKennwort.Text     = 'Kennwort ändern'
+$btnKennwort.Location = New-Object System.Drawing.Point(236, 340)
+$btnKennwort.Size     = New-Object System.Drawing.Size(150, 26)
 
-$form.Controls.AddRange(@($btnScan, $btnAbbruch, $btnZeigen, $btnOrdner))
+$btnServiceZu          = New-Object System.Windows.Forms.Button
+$btnServiceZu.Text     = 'Service schließen'
+$btnServiceZu.Location = New-Object System.Drawing.Point(452, 340)
+$btnServiceZu.Size     = New-Object System.Drawing.Size(150, 26)
 
-# --- Statusbereich ----------------------------------------------------------
-$lblStatus          = New-Object System.Windows.Forms.Label
-$lblStatus.Text     = 'Bereit.'
-$lblStatus.Location = New-Object System.Drawing.Point(18, 418)
-$lblStatus.Size     = New-Object System.Drawing.Size(522, 20)
-$lblStatus.Anchor   = 'Top,Left,Right'
+$pnlService.Controls.AddRange(@($lblService, $grpGeraet, $grpAblage, $lblProt, $txtLog,
+                                $btnLink, $btnKennwort, $btnServiceZu))
+$form.Controls.Add($pnlService)
 
-$txtLog             = New-Object System.Windows.Forms.TextBox
-$txtLog.Location    = New-Object System.Drawing.Point(18, 440)
-$txtLog.Size        = New-Object System.Drawing.Size(522, 130)
-$txtLog.Multiline   = $true
-$txtLog.ReadOnly    = $true
-$txtLog.ScrollBars  = 'Vertical'
-$txtLog.BackColor   = [System.Drawing.Color]::White
-$txtLog.Font        = New-Object System.Drawing.Font('Consolas', 9)
-$txtLog.Anchor      = 'Top,Bottom,Left,Right'
-
-# --- Fusszeile mit Herausgeber ----------------------------------------------
+# --- Fusszeile --------------------------------------------------------------
 $lblFuss           = New-Object System.Windows.Forms.Label
 $lblFuss.Text      = "$($script:Firma)  -  $($script:Strasse)  -  $($script:Ort)"
-$lblFuss.Location  = New-Object System.Drawing.Point(18, 578)
-$lblFuss.Size      = New-Object System.Drawing.Size(522, 18)
-$lblFuss.Anchor    = 'Bottom,Left,Right'
+$lblFuss.Location  = New-Object System.Drawing.Point(18, 304)
+$lblFuss.Size      = New-Object System.Drawing.Size(584, 18)
+$lblFuss.Anchor    = 'Bottom,Left'
 $lblFuss.ForeColor = [System.Drawing.Color]::Gray
 $lblFuss.Font      = New-Object System.Drawing.Font('Segoe UI', 8)
-
-$form.Controls.AddRange(@($lblStatus, $txtLog, $lblFuss))
+$form.Controls.Add($lblFuss)
 
 # ---------------------------------------------------------------------------
 # Zustand
@@ -448,15 +621,16 @@ $script:LogDatei    = $null
 $script:FehlerDatei = $null
 $script:LetzterLog  = ''
 $script:Ergebnis    = $null
+$script:ServiceFrei = $false
 
 function Lies-Oberflaeche {
     $bildart = 'jpg'
     if ($cmbBildart.SelectedItem) { $bildart = ([string]$cmbBildart.SelectedItem).ToLowerInvariant() }
     $farbe = 'farbe'
     switch ([string]$cmbFarbe.SelectedItem) {
-        'Graustufen'   { $farbe = 'grau' }
-        'Schwarzweiss' { $farbe = 'sw' }
-        default        { $farbe = 'farbe' }
+        'Graustufen'  { $farbe = 'grau' }
+        'Schwarzweiß' { $farbe = 'sw' }
+        default       { $farbe = 'farbe' }
     }
     $dpi = 300
     if ($cmbDpi.SelectedItem) { $dpi = [int]([string]$cmbDpi.SelectedItem) }
@@ -487,12 +661,10 @@ function Aktualisiere-Muster {
 }
 
 function Setze-Betrieb([bool]$laeuft) {
-    $btnScan.Enabled    = -not $laeuft
-    $btnAbbruch.Enabled = $laeuft
-    $btnAktual.Enabled  = -not $laeuft
-    $grpAusgabe.Enabled = -not $laeuft
-    $grpAblage.Enabled  = -not $laeuft
-    $cmbGeraet.Enabled  = -not $laeuft
+    $btnScan.Enabled     = -not $laeuft
+    $btnAbbruch.Enabled  = $laeuft
+    $grpWas.Enabled      = -not $laeuft
+    $pnlService.Enabled  = -not $laeuft
     if ($laeuft) { $form.Cursor = [System.Windows.Forms.Cursors]::AppStarting }
     else         { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
 }
@@ -503,7 +675,7 @@ function Fuelle-Scannerliste {
     if ($namen.Count -eq 0) {
         [void]$cmbGeraet.Items.Add('(kein Scanner gefunden)')
         $cmbGeraet.SelectedIndex = 0
-        $lblStatus.Text = 'Kein Scanner gefunden - Geraet einschalten, Kabel und Treiber pruefen.'
+        $lblStatus.Text = 'Kein Scanner gefunden - bitte Gerät einschalten und Kabel prüfen.'
         return
     }
     foreach ($n in $namen) { [void]$cmbGeraet.Items.Add($n) }
@@ -517,8 +689,92 @@ function Fuelle-Scannerliste {
 }
 
 # ---------------------------------------------------------------------------
+# Kennwortabfrage
+# ---------------------------------------------------------------------------
+function Show-Kennwortfrage([string]$titel, [string]$beschriftung) {
+    $d                 = New-Object System.Windows.Forms.Form
+    $d.Text            = $titel
+    $d.ClientSize      = New-Object System.Drawing.Size(390, 132)
+    $d.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $d.StartPosition   = 'CenterParent'
+    $d.MinimizeBox     = $false
+    $d.MaximizeBox     = $false
+    $d.ShowInTaskbar   = $false
+    $d.Font            = $form.Font
+    if ($form.Icon) { $d.Icon = $form.Icon }
+
+    $l          = New-Object System.Windows.Forms.Label
+    $l.Text     = $beschriftung
+    $l.Location = New-Object System.Drawing.Point(18, 18)
+    $l.Size     = New-Object System.Drawing.Size(354, 22)
+
+    $t              = New-Object System.Windows.Forms.TextBox
+    $t.Location     = New-Object System.Drawing.Point(18, 46)
+    $t.Size         = New-Object System.Drawing.Size(354, 24)
+    $t.UseSystemPasswordChar = $true
+
+    $ok          = New-Object System.Windows.Forms.Button
+    $ok.Text     = 'OK'
+    $ok.Location = New-Object System.Drawing.Point(196, 88)
+    $ok.Size     = New-Object System.Drawing.Size(84, 28)
+    $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+
+    $ab          = New-Object System.Windows.Forms.Button
+    $ab.Text     = 'Abbrechen'
+    $ab.Location = New-Object System.Drawing.Point(288, 88)
+    $ab.Size     = New-Object System.Drawing.Size(84, 28)
+    $ab.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+
+    $d.Controls.AddRange(@($l, $t, $ok, $ab))
+    $d.AcceptButton = $ok
+    $d.CancelButton = $ab
+
+    $antwort = $d.ShowDialog($form)
+    $eingabe = $t.Text
+    $d.Dispose()
+    if ($antwort -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+    return $eingabe
+}
+
+function Zeige-Service([bool]$sichtbar) {
+    $pnlService.Visible = $sichtbar
+    if ($sichtbar) { $form.ClientSize = New-Object System.Drawing.Size(620, $script:HoeheService) }
+    else           { $form.ClientSize = New-Object System.Drawing.Size(620, $script:HoeheKunde) }
+}
+
+function Oeffne-Service {
+    if ($pnlService.Visible) { return }
+    if (-not $script:ServiceFrei) {
+        $eingabe = Show-Kennwortfrage 'Service' 'Servicekennwort eingeben:'
+        if ($null -eq $eingabe) { return }
+        if (-not (Test-Kennwort $eingabe)) {
+            [void][System.Windows.Forms.MessageBox]::Show($form, 'Das Kennwort ist falsch.', 'Service', 'OK', 'Warning')
+            return
+        }
+        $script:ServiceFrei = $true
+    }
+    Zeige-Service $true
+}
+
+# ---------------------------------------------------------------------------
 # Ereignisse
 # ---------------------------------------------------------------------------
+$form.Add_KeyDown({
+    param($absender, $ereignis)
+    if ($ereignis.Control -and $ereignis.Alt -and $ereignis.KeyCode -eq [System.Windows.Forms.Keys]::S) {
+        $ereignis.SuppressKeyPress = $true
+        Oeffne-Service
+    }
+})
+
+# Doppelklick auf den Kopfbereich oeffnet den Servicebereich ebenfalls
+$pnlKopf.Add_DoubleClick({ Oeffne-Service })
+$lblTitel.Add_DoubleClick({ Oeffne-Service })
+$lblUnter.Add_DoubleClick({ Oeffne-Service })
+if ($logoBild) { $picLogo.Add_DoubleClick({ Oeffne-Service }) } else { $lblLogo.Add_DoubleClick({ Oeffne-Service }) }
+
+$btnServiceZu.Add_Click({ Zeige-Service $false })
+
 $btnAktual.Add_Click({ Fuelle-Scannerliste })
 
 $radPdf.Add_CheckedChanged({ Aktualisiere-Muster })
@@ -528,7 +784,7 @@ $txtName.Add_TextChanged({ Aktualisiere-Muster })
 
 $btnZiel.Add_Click({
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = 'Ordner fuer die Scans waehlen'
+    $dialog.Description = 'Ordner für die Scans wählen'
     if (Test-Path -LiteralPath $txtZiel.Text) { $dialog.SelectedPath = $txtZiel.Text }
     if ($dialog.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
         $txtZiel.Text = $dialog.SelectedPath
@@ -543,7 +799,7 @@ $btnOrdner.Add_Click({
         if (-not (Test-Path -LiteralPath $ziel)) { New-Item -ItemType Directory -Path $ziel -Force | Out-Null }
         Start-Process -FilePath 'explorer.exe' -ArgumentList ('"' + $ziel + '"')
     } catch {
-        [void][System.Windows.Forms.MessageBox]::Show($form, "Der Ordner konnte nicht geoeffnet werden:`r`n$ziel",
+        [void][System.Windows.Forms.MessageBox]::Show($form, "Der Ordner konnte nicht geöffnet werden:`r`n$ziel",
             'Scannen', 'OK', 'Warning')
     }
 })
@@ -559,12 +815,61 @@ $btnZeigen.Add_Click({
     } catch { }
 })
 
+$btnLink.Add_Click({
+    try {
+        $desktop = [Environment]::GetFolderPath('Desktop')
+        $pfad = [IO.Path]::Combine($desktop, 'Scannen.lnk')
+        $ws = New-Object -ComObject WScript.Shell
+        $lnk = $ws.CreateShortcut($pfad)
+        $lnk.TargetPath       = $script:EigenerPfad
+        $lnk.WorkingDirectory = $script:Ordner
+        $lnk.WindowStyle      = 7        # minimiert starten: kein Konsolenfenster
+        $lnk.Description      = "Scannen - $($script:Firma)"
+        if ($script:IcoPfad -and (Test-Path -LiteralPath $script:IcoPfad)) {
+            $lnk.IconLocation = "$($script:IcoPfad),0"
+        }
+        $lnk.Save()
+        [void][System.Windows.Forms.MessageBox]::Show($form,
+            "Die Verknüpfung 'Scannen' liegt jetzt auf dem Desktop.", 'Scannen', 'OK', 'Information')
+    } catch {
+        [void][System.Windows.Forms.MessageBox]::Show($form,
+            "Die Verknüpfung konnte nicht angelegt werden:`r`n$($_.Exception.Message)", 'Scannen', 'OK', 'Warning')
+    }
+})
+
+$btnKennwort.Add_Click({
+    $neu = Show-Kennwortfrage 'Kennwort ändern' 'Neues Servicekennwort:'
+    if ($null -eq $neu) { return }
+    if ($neu.Length -lt 4) {
+        [void][System.Windows.Forms.MessageBox]::Show($form, 'Bitte mindestens vier Zeichen verwenden.', 'Kennwort ändern', 'OK', 'Warning')
+        return
+    }
+    $wdh = Show-Kennwortfrage 'Kennwort ändern' 'Neues Kennwort wiederholen:'
+    if ($null -eq $wdh) { return }
+    if ($neu -cne $wdh) {
+        [void][System.Windows.Forms.MessageBox]::Show($form, 'Die beiden Eingaben sind nicht gleich.', 'Kennwort ändern', 'OK', 'Warning')
+        return
+    }
+    $hash = Get-TextHash $neu
+    try {
+        Set-KennwortHash $hash
+        [void][System.Windows.Forms.MessageBox]::Show($form, 'Das Servicekennwort wurde geändert.', 'Kennwort ändern', 'OK', 'Information')
+    } catch {
+        $script:KennwortHash = $hash   # gilt zumindest für diese Sitzung
+        [void][System.Windows.Forms.MessageBox]::Show($form,
+            ("Die Datei konnte nicht geändert werden (schreibgeschützt?)." + "`r`n`r`n" +
+             "Tragen Sie in Scanner.bat von Hand ein:" + "`r`n" +
+             "`$script:KennwortHash = '$hash'"),
+            'Kennwort ändern', 'OK', 'Warning')
+    }
+})
+
 $btnAbbruch.Add_Click({
     if ($null -eq $script:Prozess) { return }
     try {
         if (-not $script:Prozess.HasExited) {
             $script:Prozess.Kill()
-            $lblStatus.Text = 'Abgebrochen. Der Scanner zieht ein bereits begonnenes Blatt noch zu Ende.'
+            $lblStatus.Text = 'Abgebrochen. Ein bereits begonnenes Blatt zieht der Scanner noch zu Ende.'
         }
     } catch { }
 })
@@ -593,6 +898,12 @@ $timer.Add_Tick({
         $txtLog.Text = $aufbereitet
         $txtLog.SelectionStart = $txtLog.Text.Length
         $txtLog.ScrollToCaret()
+        # letzte Meldung auch in der Kundenansicht zeigen
+        $zeilen = @($aufbereitet -split "`r`n" | Where-Object { $_.Trim() })
+        if ($zeilen.Count -gt 0) {
+            $letzte = $zeilen[$zeilen.Count - 1].Trim()
+            if ($letzte -match '^\s*Seite ') { $lblStatus.Text = $letzte }
+        }
     }
 
     if (-not $script:Prozess.HasExited) { return }
@@ -607,14 +918,19 @@ $timer.Add_Tick({
     $btnZeigen.Enabled = [bool]$script:Ergebnis
 
     switch ($code) {
-        0 { $lblStatus.Text = 'Fertig.' }
-        2 { $lblStatus.Text = 'Fehlerhafte Einstellung - bitte Werte pruefen.' }
-        3 { $lblStatus.Text = 'Kein Scanner gefunden oder Windows-Bilderfassung nicht verfuegbar.' }
-        4 { $lblStatus.Text = 'Es wurde kein Blatt eingezogen - Dokument einlegen und erneut scannen.' }
-        5 { $lblStatus.Text = 'Fehler waehrend des Scans - laeuft eine andere Scan-Software?' }
-        6 { $lblStatus.Text = 'Die Datei konnte nicht gespeichert werden - Zielordner pruefen.' }
+        0 {
+            $anzahl = ''
+            if ($script:LetzterLog -match '(?m)^Fertig:\s*(\d+)\s') { $anzahl = $matches[1] }
+            if ($anzahl) { $lblStatus.Text = "Fertig - $anzahl Seite(n) gescannt und gespeichert." }
+            else         { $lblStatus.Text = 'Fertig.' }
+        }
+        2 { $lblStatus.Text = 'Fehlerhafte Einstellung - bitte den Service verständigen.' }
+        3 { $lblStatus.Text = 'Kein Scanner gefunden - Gerät einschalten und Kabel prüfen.' }
+        4 { $lblStatus.Text = 'Es wurde kein Blatt eingezogen - Dokument einlegen und erneut auf Scannen klicken.' }
+        5 { $lblStatus.Text = 'Fehler während des Scans - läuft eine andere Scan-Software?' }
+        6 { $lblStatus.Text = 'Die Datei konnte nicht gespeichert werden - bitte den Service verständigen.' }
         9 { $lblStatus.Text = 'PowerShell wurde nicht gefunden.' }
-        default { $lblStatus.Text = "Beendet (Rueckgabewert $code)." }
+        default { $lblStatus.Text = "Beendet (Rückgabewert $code)." }
     }
     Aktualisiere-Muster
 })
@@ -630,13 +946,15 @@ $btnScan.Add_Click({
     $aktuell = Lies-Oberflaeche
     $ziel = "$($aktuell.Ziel)".Trim()
     if (-not $ziel) {
-        [void][System.Windows.Forms.MessageBox]::Show($form, 'Bitte zuerst einen Zielordner waehlen.', 'Scannen', 'OK', 'Warning')
+        [void][System.Windows.Forms.MessageBox]::Show($form,
+            'Es ist noch kein Zielordner eingerichtet. Bitte den Service verständigen.', 'Scannen', 'OK', 'Warning')
         return
     }
     try {
         if (-not (Test-Path -LiteralPath $ziel)) { New-Item -ItemType Directory -Path $ziel -Force | Out-Null }
     } catch {
-        [void][System.Windows.Forms.MessageBox]::Show($form, "Der Zielordner kann nicht angelegt werden:`r`n$ziel", 'Scannen', 'OK', 'Error')
+        [void][System.Windows.Forms.MessageBox]::Show($form,
+            "Der Zielordner ist nicht erreichbar:`r`n$ziel`r`n`r`nBitte den Service verständigen.", 'Scannen', 'OK', 'Error')
         return
     }
 
@@ -646,7 +964,7 @@ $btnScan.Add_Click({
     $script:Ergebnis    = $null
     $btnZeigen.Enabled  = $false
     $txtLog.Text        = ''
-    $lblStatus.Text     = 'Scan laeuft - bitte warten ...'
+    $lblStatus.Text     = 'Scan läuft - bitte warten ...'
     Setze-Betrieb $true
 
     $kennung = [Guid]::NewGuid().ToString('N')
@@ -671,7 +989,7 @@ $form.Add_FormClosing({
     param($absender, $ereignis)
     if ($null -ne $script:Prozess -and -not $script:Prozess.HasExited) {
         $antwort = [System.Windows.Forms.MessageBox]::Show($form,
-            'Es laeuft noch ein Scan. Wirklich beenden?', 'Scannen', 'YesNo', 'Question')
+            'Es läuft noch ein Scan. Wirklich beenden?', 'Scannen', 'YesNo', 'Question')
         if ($antwort -ne [System.Windows.Forms.DialogResult]::Yes) {
             $ereignis.Cancel = $true
             return
@@ -688,19 +1006,19 @@ $form.Add_FormClosing({
 # ---------------------------------------------------------------------------
 # Gespeicherte Einstellungen in die Oberflaeche uebernehmen
 # ---------------------------------------------------------------------------
-$txtZiel.Text      = $e.Ziel
-$txtName.Text      = $e.Name
-$chkDuplex.Checked = [bool]$e.Duplex
+$txtZiel.Text       = $e.Ziel
+$txtName.Text       = $e.Name
+$chkDuplex.Checked  = [bool]$e.Duplex
 $chkOeffnen.Checked = [bool]$e.Oeffnen
-$radPdf.Checked    = ($e.Format -eq 'pdf')
-$radBild.Checked   = ($e.Format -ne 'pdf')
+$radPdf.Checked     = ($e.Format -eq 'pdf')
+$radBild.Checked    = ($e.Format -ne 'pdf')
 
 $cmbBildart.SelectedItem = ("$($e.Bildart)".ToUpperInvariant())
 if ($null -eq $cmbBildart.SelectedItem) { $cmbBildart.SelectedIndex = 0 }
 
 switch ("$($e.Farbe)") {
     'grau' { $cmbFarbe.SelectedItem = 'Graustufen' }
-    'sw'   { $cmbFarbe.SelectedItem = 'Schwarzweiss' }
+    'sw'   { $cmbFarbe.SelectedItem = 'Schwarzweiß' }
     default { $cmbFarbe.SelectedItem = 'Farbe' }
 }
 $cmbDpi.SelectedItem = [string][int]$e.Dpi
@@ -714,4 +1032,5 @@ if (-not (Test-Path -LiteralPath $script:ScanBat)) {
 }
 
 [void]$form.ShowDialog()
+if ($logoBild) { $logoBild.Dispose() }
 $form.Dispose()

@@ -19,51 +19,81 @@ standardmäßig als mehrseitige PDF-Datei unter **Eigene Dokumente\Scans**.
 
 # 1. Das Fenster: `Scanner.bat`
 
-Doppelklick auf `Scanner.bat` öffnet:
+Doppelklick auf `Scanner.bat` öffnet die **Kundenansicht** — bewusst knapp
+gehalten: was gescannt wird, und die Schaltfläche *Scannen*.
 
 ```
-┌─ Scannen ──────────────────────────────────────────────┐
-│  Scanner: [ CANON DR-C240              ▾ ]  [ Suchen ] │
-│                                                        │
-│ ┌ Ausgabe ─────────────────────────────────────────┐   │
-│ │ (•) PDF (mehrseitig)   ( ) Bilddateien  [JPG ▾]  │   │
-│ │ Farbe: [Farbe ▾]  Auflösung: [300 ▾] dpi         │   │
-│ │ [ ] Vorder- und Rückseite                        │   │
-│ └──────────────────────────────────────────────────┘   │
-│ ┌ Ablage ──────────────────────────────────────────┐   │
-│ │ Ordner: [C:\Users\...\Documents\Scans] [ Wählen ] │   │
-│ │ Name:   [Scan        ]  -> Scan_2026-09-14_1530… │   │
-│ │ [x] Ergebnis nach dem Scan öffnen                │   │
-│ └──────────────────────────────────────────────────┘   │
-│  [ Scannen ] [Abbrechen] [Ergebnis zeigen] [ Ordner ]  │
-│  Bereit.                                               │
-│ ┌──────────────────────────────────────────────────┐   │
-│ │ Seite 1 wird gescannt ... fertig                 │   │
-│ │ Seite 2 wird gescannt ... fertig                 │   │
-│ └──────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────┘
+┌─ Scannen ──────────────────────────────────────────────────┐
+│  [ IDO-Logo ]        Scannen                               │
+│                      Canon imageFORMULA DR-C240            │
+├────────────────────────────────────────────────────────────┤
+│ ┌ Was soll gescannt werden? ─────────────────────────────┐ │
+│ │ (•) PDF (alle Blätter in einer Datei)                  │ │
+│ │ ( ) Bilddateien  [JPG ▾]                               │ │
+│ │ [ ] Vorder- und Rückseite scannen                      │ │
+│ └────────────────────────────────────────────────────────┘ │
+│  [   Scannen   ] [Abbrechen] [Ergebnis zeigen] [ Ordner ]  │
+│  Fertig - 3 Seite(n) gescannt und gespeichert.             │
+├────────────────────────────────────────────────────────────┤
+│  IDO GmbH - Anderslebener Str. 40 - 39387 Oschersleben     │
+└────────────────────────────────────────────────────────────┘
 ```
 
-* **Einmal einstellen, immer gültig:** Zielordner, Format, Farbe, Auflösung,
-  Duplex, Dateiname und die Scannerauswahl werden gespeichert und beim nächsten
-  Start wieder verwendet. Die Einstellungen liegen in
-  `%APPDATA%\Scan-DR-C240\einstellungen.json`.
-* Während des Scans bleibt das Fenster bedienbar, der Fortschritt läuft unten
-  mit, und *Abbrechen* stoppt den Vorgang.
-* *Ergebnis zeigen* öffnet den Explorer mit der fertigen Datei, *Ordner* den
-  Zielordner.
+Zielordner, Scanner, Auflösung und Protokoll sind hier **nicht** sichtbar —
+die Kundin kann nichts verstellen.
 
-### Logo im Fenster
+## Servicebereich (nur für die Einrichtung)
+
+Geöffnet wird er auf zwei Wegen, beide unauffällig:
+
+* **Strg + Alt + S**
+* **Doppelklick auf das Logo** im Fensterkopf
+
+Danach fragt das Programm das **Servicekennwort** ab. Stimmt es, klappt das
+Fenster nach unten auf und zeigt:
+
+| Bereich | Inhalt |
+|---|---|
+| Gerät und Qualität | Scannerauswahl, *Suchen*, Farbmodus, Auflösung |
+| Ablage | **Zielordner**, Dateiname, Namensvorschau, „Ergebnis öffnen" |
+| Protokoll | vollständige Ausgabe des letzten Scans |
+| Schaltflächen | Verknüpfung auf dem Desktop, Kennwort ändern, Service schließen |
+
+Auslieferungszustand des Kennworts: **`IDO-Service`** — bei der Einrichtung
+über *Kennwort ändern* auf ein eigenes umstellen. Das Kennwort steht nicht im
+Klartext in der Datei, sondern als SHA-256-Prüfsumme; *Kennwort ändern*
+schreibt die neue Prüfsumme direkt in `Scanner.bat` zurück. Ist die Datei
+schreibgeschützt, zeigt das Programm die Zeile zum manuellen Eintragen an.
+
+> **Einordnung:** Das ist ein Bedienschutz, kein Zugriffsschutz. Eine
+> Batchdatei ist lesbarer Text — wer sich auskennt, kann die Prüfsumme
+> austauschen. Gegen versehentliches Verstellen und gegen neugieriges
+> Herumklicken hilft es zuverlässig; soll der Pfad wirklich unantastbar sein,
+> gehören zusätzlich NTFS-Schreibrechte auf den Programmordner gesetzt.
+
+## Wo die Einstellungen liegen
+
+Zielordner, Format, Farbe, Auflösung, Duplex, Dateiname und Scannerauswahl
+werden gespeichert — bevorzugt als `einstellungen.json` **neben `Scanner.bat`**.
+Damit gilt Ihre Einrichtung für **jeden Benutzer des Rechners**. Ist der
+Programmordner schreibgeschützt, weicht das Programm auf
+`%APPDATA%\Scan-DR-C240\einstellungen.json` aus (dann gilt sie nur für den
+angemeldeten Benutzer).
+
+## Logo, Symbol und Desktop-Verknüpfung
 
 Liegt im Programmordner eine Datei **`logo.png`** (alternativ `logo.jpg`,
-`logo.bmp` oder `logo.gif`), zeigt `Scanner.bat` sie oben links im Fensterkopf
-und verwendet sie als Fenstersymbol. Ohne diese Datei steht dort der Schriftzug
-*IDO GmbH*. Es ist nichts einzustellen — Datei dazulegen genügt.
+`logo.bmp` oder `logo.gif`), passiert beim Start automatisch:
 
-Für den Start ohne kurz aufblitzendes Konsolenfenster: Rechtsklick auf
-`Scanner.bat` → *Verknüpfung erstellen*, dann in den Eigenschaften der
-Verknüpfung *Ausführen: Minimiert* wählen. Die Verknüpfung lässt sich auch an
-Startmenü oder Taskleiste anheften.
+* das Logo erscheint im Fensterkopf,
+* daraus wird eine **`logo.ico`** erzeugt (16 bis 256 Pixel, mit
+  Transparenz) — sie dient als Fenster- und Taskleistensymbol,
+* *Verknüpfung auf dem Desktop* im Servicebereich legt eine Verknüpfung
+  **mit diesem Symbol** an, die **minimiert** startet: damit blitzt beim
+  Start kein Konsolenfenster mehr auf.
+
+Ohne Logodatei steht im Kopf der Schriftzug *IDO GmbH*; eine vorhandene
+`logo.ico` wird auch allein verwendet.
 
 ---
 
@@ -179,6 +209,16 @@ Beim Doppelklick bleibt das Fenster bis zum Tastendruck offen. Schließt es sich
 trotzdem, `Scan.bat` in einer Eingabeaufforderung starten — dann bleiben alle
 Meldungen sichtbar.
 
+**Servicekennwort vergessen**
+In `Scanner.bat` die Zeile mit `$script:KennwortHash` suchen und den Wert
+durch die Prüfsumme des Auslieferungskennworts `IDO-Service` ersetzen:
+`c94d0144f7b6b395083a18da0e53b2483626fd01e98ed67c3cbb5b1cd6a3fdb3`
+
+**Die Kundin soll den Zielordner gar nicht ändern können**
+Zusätzlich zum Kennwort die NTFS-Rechte auf den Programmordner so setzen, dass
+nur Administratoren schreiben dürfen. Dann liegt `einstellungen.json` dort
+unveränderlich; die Kundin kann das Programm weiter starten und scannen.
+
 **„Scan.bat wurde nicht gefunden“**
 `Scanner.bat` erwartet `Scan.bat` im selben Ordner. Beide Dateien zusammen
 kopieren — nicht nur die Verknüpfung.
@@ -216,6 +256,14 @@ den PowerShell-Teil, der in derselben Datei steht. `Scanner.bat` baut die
 Oberfläche mit Windows Forms auf und startet `Scan.bat` als eigenen Prozess —
 deshalb friert das Fenster während des Scannens nicht ein und der Vorgang lässt
 sich abbrechen. Die Scan-Logik gibt es also nur einmal.
+
+* Das Servicekennwort wird als SHA-256-Prüfsumme geprüft und nur als solche
+  gespeichert.
+* Die `logo.ico` wird zur Laufzeit aus dem Logo gebaut: je Größe ein
+  PNG-Block, zusammengesetzt zu einer ICO-Datei mit 16/24/32/48/64/128/256
+  Pixel Kantenlänge.
+* Die Desktop-Verknüpfung entsteht über `WScript.Shell` mit Fensterstil
+  „minimiert".
 
 * Der Scan läuft über **WIA** (`WIA.DeviceManager`); Einzug, Duplex, Farbmodus,
   Auflösung und Scanbereich werden über die WIA-Eigenschaften gesetzt. Nach
