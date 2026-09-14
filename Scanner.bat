@@ -111,6 +111,9 @@ function Get-Einstellungen {
         Name      = 'Scan'
         Oeffnen   = $true
         Scanner   = ''
+        Kachel    = $true
+        KachelX   = -1
+        KachelY   = -1
     }
     if (Test-Path -LiteralPath $script:EinstDatei) {
         try {
@@ -122,6 +125,9 @@ function Get-Einstellungen {
             $e.Dpi     = [int]$e.Dpi
             $e.Duplex  = [bool]$e.Duplex
             $e.Oeffnen = [bool]$e.Oeffnen
+            $e.Kachel  = [bool]$e.Kachel
+            $e.KachelX = [int]$e.KachelX
+            $e.KachelY = [int]$e.KachelY
         } catch {
             # beschaedigte Datei: mit den Vorgaben weiterarbeiten
         }
@@ -292,7 +298,12 @@ Add-Type -AssemblyName System.Drawing
 $e = Get-Einstellungen
 
 $script:HoeheKunde   = 330
-$script:HoeheService = 700
+$script:HoeheService = 726
+try {
+    # auf kleinen Bildschirmen kuerzen; der Servicebereich bekommt dann eine Bildlaufleiste
+    $platz = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 70
+    if ($script:HoeheService -gt $platz) { $script:HoeheService = [Math]::Max(430, $platz) }
+} catch { }
 
 $firmenBlau = [System.Drawing.Color]::FromArgb(43, 74, 155)
 
@@ -467,7 +478,7 @@ $form.Controls.Add($lblLinie2)
 # ===========================================================================
 $pnlService          = New-Object System.Windows.Forms.Panel
 $pnlService.Location = New-Object System.Drawing.Point(0, 296)
-$pnlService.Size     = New-Object System.Drawing.Size(620, 366)
+$pnlService.Size     = New-Object System.Drawing.Size(620, 392)
 $pnlService.Visible  = $false
 
 $lblService          = New-Object System.Windows.Forms.Label
@@ -570,14 +581,19 @@ $chkOeffnen.AutoSize = $true
 $grpAblage.Controls.AddRange(@($lblZiel, $txtZiel, $btnZiel, $lblName, $txtName, $lblMuster, $chkOeffnen))
 
 # --- Protokoll --------------------------------------------------------------
+$chkKachel          = New-Object System.Windows.Forms.CheckBox
+$chkKachel.Text     = 'Kleines Fenster unten rechts anzeigen (immer im Vordergrund)'
+$chkKachel.Location = New-Object System.Drawing.Point(18, 250)
+$chkKachel.AutoSize = $true
+
 $lblProt          = New-Object System.Windows.Forms.Label
 $lblProt.Text     = 'Protokoll:'
-$lblProt.Location = New-Object System.Drawing.Point(18, 250)
+$lblProt.Location = New-Object System.Drawing.Point(18, 276)
 $lblProt.AutoSize = $true
 
 $txtLog            = New-Object System.Windows.Forms.TextBox
-$txtLog.Location   = New-Object System.Drawing.Point(18, 270)
-$txtLog.Size       = New-Object System.Drawing.Size(584, 66)
+$txtLog.Location   = New-Object System.Drawing.Point(18, 296)
+$txtLog.Size       = New-Object System.Drawing.Size(584, 58)
 $txtLog.Multiline  = $true
 $txtLog.ReadOnly   = $true
 $txtLog.ScrollBars = 'Vertical'
@@ -586,20 +602,20 @@ $txtLog.Font       = New-Object System.Drawing.Font('Consolas', 9)
 
 $btnLink          = New-Object System.Windows.Forms.Button
 $btnLink.Text     = 'Verknüpfung auf dem Desktop'
-$btnLink.Location = New-Object System.Drawing.Point(18, 340)
+$btnLink.Location = New-Object System.Drawing.Point(18, 360)
 $btnLink.Size     = New-Object System.Drawing.Size(210, 26)
 
 $btnKennwort          = New-Object System.Windows.Forms.Button
 $btnKennwort.Text     = 'Kennwort ändern'
-$btnKennwort.Location = New-Object System.Drawing.Point(236, 340)
+$btnKennwort.Location = New-Object System.Drawing.Point(236, 360)
 $btnKennwort.Size     = New-Object System.Drawing.Size(150, 26)
 
 $btnServiceZu          = New-Object System.Windows.Forms.Button
 $btnServiceZu.Text     = 'Service schließen'
-$btnServiceZu.Location = New-Object System.Drawing.Point(452, 340)
+$btnServiceZu.Location = New-Object System.Drawing.Point(452, 360)
 $btnServiceZu.Size     = New-Object System.Drawing.Size(150, 26)
 
-$pnlService.Controls.AddRange(@($lblService, $grpGeraet, $grpAblage, $lblProt, $txtLog,
+$pnlService.Controls.AddRange(@($lblService, $grpGeraet, $grpAblage, $chkKachel, $lblProt, $txtLog,
                                 $btnLink, $btnKennwort, $btnServiceZu))
 $form.Controls.Add($pnlService)
 
@@ -613,6 +629,72 @@ $lblFuss.ForeColor = [System.Drawing.Color]::Gray
 $lblFuss.Font      = New-Object System.Drawing.Font('Segoe UI', 8)
 $form.Controls.Add($lblFuss)
 
+# ===========================================================================
+#  Kleine Kachel unten rechts - liegt immer im Vordergrund und oeffnet
+#  auf Klick dieses Fenster mit den Optionen.
+# ===========================================================================
+$kachel                 = New-Object System.Windows.Forms.Form
+$kachel.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+$kachel.ShowInTaskbar   = $false
+$kachel.TopMost         = $true
+$kachel.StartPosition   = 'Manual'
+$kachel.Size            = New-Object System.Drawing.Size(180, 60)
+$kachel.BackColor       = $firmenBlau          # dient als 2 Pixel breiter Rahmen
+$kachel.Padding         = New-Object System.Windows.Forms.Padding(2)
+$kachel.Font            = $form.Font
+if ($form.Icon) { $kachel.Icon = $form.Icon }
+
+$kachelInnen           = New-Object System.Windows.Forms.Panel
+$kachelInnen.Dock      = [System.Windows.Forms.DockStyle]::Fill
+$kachelInnen.BackColor = [System.Drawing.Color]::White
+$kachel.Controls.Add($kachelInnen)
+
+$kachelBild = $null
+if ($logoDatei) {
+    try { $kachelBild = Get-LogoBild $logoDatei } catch { $kachelBild = $null }
+}
+if ($kachelBild) {
+    $picKachel          = New-Object System.Windows.Forms.PictureBox
+    $picKachel.Location = New-Object System.Drawing.Point(8, 7)
+    $picKachel.Size     = New-Object System.Drawing.Size(74, 20)
+    $picKachel.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
+    $picKachel.Image    = $kachelBild
+    $kachelInnen.Controls.Add($picKachel)
+    $kachelTitelX = 90
+} else {
+    $kachelTitelX = 10
+}
+
+$lblKachelTitel           = New-Object System.Windows.Forms.Label
+$lblKachelTitel.Text      = 'Scannen'
+$lblKachelTitel.Location  = New-Object System.Drawing.Point($kachelTitelX, 5)
+$lblKachelTitel.AutoSize  = $true
+$lblKachelTitel.Font      = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+$lblKachelTitel.ForeColor = $firmenBlau
+
+$lblKachelStatus              = New-Object System.Windows.Forms.Label
+$lblKachelStatus.Text         = 'Bereit'
+$lblKachelStatus.Location     = New-Object System.Drawing.Point(9, 33)
+$lblKachelStatus.Size         = New-Object System.Drawing.Size(160, 18)
+$lblKachelStatus.AutoEllipsis = $true
+$lblKachelStatus.ForeColor    = [System.Drawing.Color]::DimGray
+$lblKachelStatus.Font         = New-Object System.Drawing.Font('Segoe UI', 8)
+
+$kachelInnen.Controls.AddRange(@($lblKachelTitel, $lblKachelStatus))
+
+$hinweis = New-Object System.Windows.Forms.ToolTip
+$hinweisText = 'Klicken: Scan-Optionen  -  rechte Maustaste: Menü  -  ziehen: verschieben'
+$hinweis.SetToolTip($kachelInnen, $hinweisText)
+$hinweis.SetToolTip($lblKachelTitel, $hinweisText)
+$hinweis.SetToolTip($lblKachelStatus, $hinweisText)
+
+$menuKachel = New-Object System.Windows.Forms.ContextMenuStrip
+$miScannen  = $menuKachel.Items.Add('Sofort scannen')
+$miOptionen = $menuKachel.Items.Add('Optionen ...')
+[void]$menuKachel.Items.Add('-')
+$miBeenden  = $menuKachel.Items.Add('Beenden')
+$kachel.ContextMenuStrip = $menuKachel
+
 # ---------------------------------------------------------------------------
 # Zustand
 # ---------------------------------------------------------------------------
@@ -622,6 +704,20 @@ $script:FehlerDatei = $null
 $script:LetzterLog  = ''
 $script:Ergebnis    = $null
 $script:ServiceFrei = $false
+$script:KachelAktiv = $true
+$script:Beenden     = $false
+$script:ZiehtGerade = $false
+$script:Gezogen     = $false
+$script:ZiehStart   = New-Object System.Drawing.Point(0, 0)
+$script:KachelStart = New-Object System.Drawing.Point(0, 0)
+
+# Statusmeldung im Fenster und in der Kachel zeigen
+function Setze-Status([string]$text) {
+    $lblStatus.Text = $text
+    $kurz = $text -replace '\s+', ' '
+    if ($kurz.Length -gt 60) { $kurz = $kurz.Substring(0, 57) + '...' }
+    $lblKachelStatus.Text = $kurz
+}
 
 function Lies-Oberflaeche {
     $bildart = 'jpg'
@@ -636,6 +732,16 @@ function Lies-Oberflaeche {
     if ($cmbDpi.SelectedItem) { $dpi = [int]([string]$cmbDpi.SelectedItem) }
     $format = 'pdf'
     if ($radBild.Checked) { $format = 'bild' }
+    # Kachelposition nur sichern, wenn die Kachel auch benutzt wird
+    $kx = -1
+    $ky = -1
+    if ($script:KachelAktiv -and $kachel.Visible) {
+        $kx = $kachel.Location.X
+        $ky = $kachel.Location.Y
+    } elseif ($e.KachelX -ge 0) {
+        $kx = [int]$e.KachelX
+        $ky = [int]$e.KachelY
+    }
     return @{
         Ziel    = $txtZiel.Text
         Format  = $format
@@ -646,6 +752,9 @@ function Lies-Oberflaeche {
         Name    = $txtName.Text
         Oeffnen = $chkOeffnen.Checked
         Scanner = [string]$cmbGeraet.SelectedItem
+        Kachel  = $chkKachel.Checked
+        KachelX = $kx
+        KachelY = $ky
     }
 }
 
@@ -675,7 +784,7 @@ function Fuelle-Scannerliste {
     if ($namen.Count -eq 0) {
         [void]$cmbGeraet.Items.Add('(kein Scanner gefunden)')
         $cmbGeraet.SelectedIndex = 0
-        $lblStatus.Text = 'Kein Scanner gefunden - bitte Gerät einschalten und Kabel prüfen.'
+        Setze-Status 'Kein Scanner gefunden - bitte Gerät einschalten und Kabel prüfen.'
         return
     }
     foreach ($n in $namen) { [void]$cmbGeraet.Items.Add($n) }
@@ -685,7 +794,7 @@ function Fuelle-Scannerliste {
         if ($gefunden -ge 0) { $index = $gefunden }
     }
     $cmbGeraet.SelectedIndex = $index
-    $lblStatus.Text = 'Bereit.'
+    Setze-Status 'Bereit.'
 }
 
 # ---------------------------------------------------------------------------
@@ -738,8 +847,20 @@ function Show-Kennwortfrage([string]$titel, [string]$beschriftung) {
 
 function Zeige-Service([bool]$sichtbar) {
     $pnlService.Visible = $sichtbar
-    if ($sichtbar) { $form.ClientSize = New-Object System.Drawing.Size(620, $script:HoeheService) }
-    else           { $form.ClientSize = New-Object System.Drawing.Size(620, $script:HoeheKunde) }
+    if ($sichtbar) {
+        $form.ClientSize = New-Object System.Drawing.Size(620, $script:HoeheService)
+        # auf niedrigen Bildschirmen bekommt der Servicebereich eine Bildlaufleiste
+        $platz = $script:HoeheService - $pnlService.Top - 28
+        if ($platz -lt 392) {
+            $pnlService.Height     = $platz
+            $pnlService.AutoScroll = $true
+        } else {
+            $pnlService.Height     = 392
+            $pnlService.AutoScroll = $false
+        }
+    } else {
+        $form.ClientSize = New-Object System.Drawing.Size(620, $script:HoeheKunde)
+    }
 }
 
 function Oeffne-Service {
@@ -869,7 +990,7 @@ $btnAbbruch.Add_Click({
     try {
         if (-not $script:Prozess.HasExited) {
             $script:Prozess.Kill()
-            $lblStatus.Text = 'Abgebrochen. Ein bereits begonnenes Blatt zieht der Scanner noch zu Ende.'
+            Setze-Status 'Abgebrochen. Ein bereits begonnenes Blatt zieht der Scanner noch zu Ende.'
         }
     } catch { }
 })
@@ -902,7 +1023,7 @@ $timer.Add_Tick({
         $zeilen = @($aufbereitet -split "`r`n" | Where-Object { $_.Trim() })
         if ($zeilen.Count -gt 0) {
             $letzte = $zeilen[$zeilen.Count - 1].Trim()
-            if ($letzte -match '^\s*Seite ') { $lblStatus.Text = $letzte }
+            if ($letzte -match '^\s*Seite ') { Setze-Status $letzte }
         }
     }
 
@@ -921,21 +1042,22 @@ $timer.Add_Tick({
         0 {
             $anzahl = ''
             if ($script:LetzterLog -match '(?m)^Fertig:\s*(\d+)\s') { $anzahl = $matches[1] }
-            if ($anzahl) { $lblStatus.Text = "Fertig - $anzahl Seite(n) gescannt und gespeichert." }
-            else         { $lblStatus.Text = 'Fertig.' }
+            if ($anzahl) { Setze-Status "Fertig - $anzahl Seite(n) gescannt und gespeichert." }
+            else         { Setze-Status 'Fertig.' }
         }
-        2 { $lblStatus.Text = 'Fehlerhafte Einstellung - bitte den Service verständigen.' }
-        3 { $lblStatus.Text = 'Kein Scanner gefunden - Gerät einschalten und Kabel prüfen.' }
-        4 { $lblStatus.Text = 'Es wurde kein Blatt eingezogen - Dokument einlegen und erneut auf Scannen klicken.' }
-        5 { $lblStatus.Text = 'Fehler während des Scans - läuft eine andere Scan-Software?' }
-        6 { $lblStatus.Text = 'Die Datei konnte nicht gespeichert werden - bitte den Service verständigen.' }
-        9 { $lblStatus.Text = 'PowerShell wurde nicht gefunden.' }
-        default { $lblStatus.Text = "Beendet (Rückgabewert $code)." }
+        2 { Setze-Status 'Fehlerhafte Einstellung - bitte den Service verständigen.' }
+        3 { Setze-Status 'Kein Scanner gefunden - Gerät einschalten und Kabel prüfen.' }
+        4 { Setze-Status 'Es wurde kein Blatt eingezogen - Dokument einlegen und erneut auf Scannen klicken.' }
+        5 { Setze-Status 'Fehler während des Scans - läuft eine andere Scan-Software?' }
+        6 { Setze-Status 'Die Datei konnte nicht gespeichert werden - bitte den Service verständigen.' }
+        9 { Setze-Status 'PowerShell wurde nicht gefunden.' }
+        default { Setze-Status "Beendet (Rückgabewert $code)." }
     }
     Aktualisiere-Muster
 })
 
-$btnScan.Add_Click({
+function Starte-Scan {
+    if ($null -ne $script:Prozess) { return }   # laeuft bereits
     if (-not (Test-Path -LiteralPath $script:ScanBat)) {
         [void][System.Windows.Forms.MessageBox]::Show($form,
             "Scan.bat wurde nicht gefunden.`r`n`r`nErwartet wird die Datei im selben Ordner:`r`n$($script:ScanBat)",
@@ -964,7 +1086,7 @@ $btnScan.Add_Click({
     $script:Ergebnis    = $null
     $btnZeigen.Enabled  = $false
     $txtLog.Text        = ''
-    $lblStatus.Text     = 'Scan läuft - bitte warten ...'
+    Setze-Status 'Scan läuft - bitte warten ...'
     Setze-Betrieb $true
 
     $kennung = [Guid]::NewGuid().ToString('N')
@@ -980,13 +1102,116 @@ $btnScan.Add_Click({
         $timer.Start()
     } catch {
         Setze-Betrieb $false
-        $lblStatus.Text = 'Der Scanvorgang konnte nicht gestartet werden.'
+        Setze-Status 'Der Scanvorgang konnte nicht gestartet werden.'
         [void][System.Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Scannen', 'OK', 'Error')
     }
-})
+}
+
+$btnScan.Add_Click({ Starte-Scan })
+
+# ---------------------------------------------------------------------------
+# Fenster und Kachel verwalten
+# ---------------------------------------------------------------------------
+function Zeige-Hauptfenster {
+    if (-not $form.Visible) { $form.Show() }
+    if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
+        $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+    }
+    $form.BringToFront()
+    [void]$form.Activate()
+}
+
+function Positioniere-Kachel {
+    $bereich = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $x = [int]$e.KachelX
+    $y = [int]$e.KachelY
+    $passt = ($x -ge $bereich.Left) -and ($y -ge $bereich.Top) -and
+             ($x -le ($bereich.Right - 40)) -and ($y -le ($bereich.Bottom - 20))
+    if (-not $passt) {
+        # Vorgabe: rechte untere Ecke des Arbeitsbereichs (ueber der Taskleiste)
+        $x = $bereich.Right  - $kachel.Width  - 16
+        $y = $bereich.Bottom - $kachel.Height - 16
+    }
+    $kachel.Location = New-Object System.Drawing.Point($x, $y)
+}
+
+function Beende-Programm {
+    if ($null -ne $script:Prozess -and -not $script:Prozess.HasExited) {
+        $antwort = [System.Windows.Forms.MessageBox]::Show($form,
+            'Es läuft noch ein Scan. Wirklich beenden?', 'Scannen', 'YesNo', 'Question')
+        if ($antwort -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+        try { $script:Prozess.Kill() } catch { }
+    }
+    $script:Beenden = $true
+    $timer.Stop()
+    [void](Save-Einstellungen (Lies-Oberflaeche))
+    foreach ($datei in @($script:LogDatei, $script:FehlerDatei)) {
+        if ($datei) { Remove-Item -LiteralPath $datei -Force -ErrorAction SilentlyContinue }
+    }
+    $kachel.Hide()
+    $form.Close()
+    [System.Windows.Forms.Application]::Exit()
+}
+
+# --- Kachel: Klick oeffnet die Optionen, Ziehen verschiebt sie --------------
+$kachelRunter = {
+    param($absender, $ereignis)
+    if ($ereignis.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
+    $script:ZiehtGerade = $true
+    $script:Gezogen     = $false
+    $script:ZiehStart   = [System.Windows.Forms.Cursor]::Position
+    $script:KachelStart = $kachel.Location
+}
+$kachelBewegt = {
+    param($absender, $ereignis)
+    if (-not $script:ZiehtGerade) { return }
+    $jetzt = [System.Windows.Forms.Cursor]::Position
+    $dx = $jetzt.X - $script:ZiehStart.X
+    $dy = $jetzt.Y - $script:ZiehStart.Y
+    if (-not $script:Gezogen -and ([Math]::Abs($dx) + [Math]::Abs($dy)) -lt 4) { return }
+    $script:Gezogen = $true
+    $kachel.Location = New-Object System.Drawing.Point(($script:KachelStart.X + $dx), ($script:KachelStart.Y + $dy))
+}
+$kachelHoch = {
+    param($absender, $ereignis)
+    if ($ereignis.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
+    $script:ZiehtGerade = $false
+    if (-not $script:Gezogen) { Zeige-Hauptfenster }
+}
+
+foreach ($teil in @($kachel, $kachelInnen, $lblKachelTitel, $lblKachelStatus)) {
+    $teil.Add_MouseDown($kachelRunter)
+    $teil.Add_MouseMove($kachelBewegt)
+    $teil.Add_MouseUp($kachelHoch)
+    $teil.ContextMenuStrip = $menuKachel
+    $teil.Cursor = [System.Windows.Forms.Cursors]::Hand
+}
+if ($kachelBild) {
+    $picKachel.Add_MouseDown($kachelRunter)
+    $picKachel.Add_MouseMove($kachelBewegt)
+    $picKachel.Add_MouseUp($kachelHoch)
+    $picKachel.ContextMenuStrip = $menuKachel
+    $picKachel.Cursor = [System.Windows.Forms.Cursors]::Hand
+}
+
+$miScannen.Add_Click({ Starte-Scan })
+$miOptionen.Add_Click({ Zeige-Hauptfenster })
+$miBeenden.Add_Click({ Beende-Programm })
 
 $form.Add_FormClosing({
     param($absender, $ereignis)
+    if ($script:Beenden) { return }          # wird gerade beendet
+
+    # Mit Kachel bleibt das Programm laufen; das Fenster verschwindet nur.
+    if ($script:KachelAktiv -and $ereignis.CloseReason -eq [System.Windows.Forms.CloseReason]::UserClosing) {
+        $ereignis.Cancel = $true
+        [void](Save-Einstellungen (Lies-Oberflaeche))
+        if ($pnlService.Visible) { Zeige-Service $false }
+        $script:ServiceFrei = $false     # naechstes Mal wieder mit Kennwort
+        $form.Hide()
+        return
+    }
+
     if ($null -ne $script:Prozess -and -not $script:Prozess.HasExited) {
         $antwort = [System.Windows.Forms.MessageBox]::Show($form,
             'Es läuft noch ein Scan. Wirklich beenden?', 'Scannen', 'YesNo', 'Question')
@@ -996,10 +1221,23 @@ $form.Add_FormClosing({
         }
         try { $script:Prozess.Kill() } catch { }
     }
+    $script:Beenden = $true
     $timer.Stop()
     [void](Save-Einstellungen (Lies-Oberflaeche))
     foreach ($datei in @($script:LogDatei, $script:FehlerDatei)) {
         if ($datei) { Remove-Item -LiteralPath $datei -Force -ErrorAction SilentlyContinue }
+    }
+    [System.Windows.Forms.Application]::Exit()
+})
+
+# Kachel ein- oder ausschalten, wenn die Einstellung im Service geaendert wird
+$chkKachel.Add_CheckedChanged({
+    $script:KachelAktiv = $chkKachel.Checked
+    if ($script:KachelAktiv) {
+        if (-not $kachel.Visible) { Positioniere-Kachel; $kachel.Show() }
+    } else {
+        $kachel.Hide()
+        if (-not $form.Visible) { Zeige-Hauptfenster }
     }
 })
 
@@ -1012,6 +1250,8 @@ $chkDuplex.Checked  = [bool]$e.Duplex
 $chkOeffnen.Checked = [bool]$e.Oeffnen
 $radPdf.Checked     = ($e.Format -eq 'pdf')
 $radBild.Checked    = ($e.Format -ne 'pdf')
+$chkKachel.Checked  = [bool]$e.Kachel
+$script:KachelAktiv = [bool]$e.Kachel
 
 $cmbBildart.SelectedItem = ("$($e.Bildart)".ToUpperInvariant())
 if ($null -eq $cmbBildart.SelectedItem) { $cmbBildart.SelectedIndex = 0 }
@@ -1028,9 +1268,21 @@ Aktualisiere-Muster
 Fuelle-Scannerliste
 
 if (-not (Test-Path -LiteralPath $script:ScanBat)) {
-    $lblStatus.Text = 'Scan.bat fehlt - sie muss im selben Ordner liegen wie dieses Programm.'
+    Setze-Status 'Scan.bat fehlt - sie muss im selben Ordner liegen wie dieses Programm.'
 }
 
-[void]$form.ShowDialog()
-if ($logoBild) { $logoBild.Dispose() }
+Setze-Status $lblStatus.Text
+
+if ($script:KachelAktiv) {
+    Positioniere-Kachel
+    $kachel.Show()
+} else {
+    $form.Show()
+}
+
+[System.Windows.Forms.Application]::Run()
+
+if ($logoBild)   { $logoBild.Dispose() }
+if ($kachelBild) { $kachelBild.Dispose() }
+$kachel.Dispose()
 $form.Dispose()

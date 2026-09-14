@@ -19,7 +19,38 @@ standardmäßig als mehrseitige PDF-Datei unter **Eigene Dokumente\Scans**.
 
 # 1. Das Fenster: `Scanner.bat`
 
-Doppelklick auf `Scanner.bat` öffnet die **Kundenansicht** — bewusst knapp
+## Die Kachel unten rechts
+
+Beim Start legt sich eine kleine Kachel in die **rechte untere Bildschirmecke**,
+über der Taskleiste. Sie liegt **immer im Vordergrund** und bleibt liegen,
+während nebenher gearbeitet wird:
+
+```
+                          ┌──────────────────────┐
+                          │ [IDO-Logo]  Scannen  │
+                          │ Seite 3 wird ...     │
+                          └──────────────────────┘
+```
+
+| Aktion | Wirkung |
+|---|---|
+| **Klick** | öffnet das Fenster mit den Optionen |
+| **Rechtsklick** | Menü: *Sofort scannen*, *Optionen …*, *Beenden* |
+| **Ziehen** | Kachel verschieben — die Position wird gemerkt |
+
+Die untere Zeile der Kachel zeigt mit, was gerade passiert („Seite 3 wird
+gescannt …", „Fertig – 3 Seite(n) gescannt und gespeichert."). Für den
+schnellsten Weg genügt also: Blätter einlegen, Rechtsklick, *Sofort scannen* —
+ganz ohne Fenster.
+
+Das Fenster lässt sich jederzeit über das **X** schließen; das Programm läuft
+mit der Kachel weiter. Beendet wird über *Beenden* im Kachelmenü. Wer die
+Kachel nicht möchte, schaltet sie im Servicebereich ab — dann verhält sich das
+Programm wie ein normales Fenster.
+
+## Das Fenster (Kundenansicht)
+
+Ein Klick auf die Kachel öffnet die **Kundenansicht** — bewusst knapp
 gehalten: was gescannt wird, und die Schaltfläche *Scannen*.
 
 ```
@@ -56,8 +87,12 @@ Fenster nach unten auf und zeigt:
 |---|---|
 | Gerät und Qualität | Scannerauswahl, *Suchen*, Farbmodus, Auflösung |
 | Ablage | **Zielordner**, Dateiname, Namensvorschau, „Ergebnis öffnen" |
+| Anzeige | Kachel unten rechts ein- oder ausschalten |
 | Protokoll | vollständige Ausgabe des letzten Scans |
 | Schaltflächen | Verknüpfung auf dem Desktop, Kennwort ändern, Service schließen |
+
+Wird das Fenster geschlossen, ist der Servicebereich wieder gesperrt — beim
+nächsten Öffnen fragt das Programm erneut nach dem Kennwort.
 
 Auslieferungszustand des Kennworts: **`IDO-Service`** — bei der Einrichtung
 über *Kennwort ändern* auf ein eigenes umstellen. Das Kennwort steht nicht im
@@ -73,8 +108,8 @@ schreibgeschützt, zeigt das Programm die Zeile zum manuellen Eintragen an.
 
 ## Wo die Einstellungen liegen
 
-Zielordner, Format, Farbe, Auflösung, Duplex, Dateiname und Scannerauswahl
-werden gespeichert — bevorzugt als `einstellungen.json` **neben `Scanner.bat`**.
+Zielordner, Format, Farbe, Auflösung, Duplex, Dateiname, Scannerauswahl sowie
+Sichtbarkeit und Position der Kachel werden gespeichert — bevorzugt als `einstellungen.json` **neben `Scanner.bat`**.
 Damit gilt Ihre Einrichtung für **jeden Benutzer des Rechners**. Ist der
 Programmordner schreibgeschützt, weicht das Programm auf
 `%APPDATA%\Scan-DR-C240\einstellungen.json` aus (dann gilt sie nur für den
