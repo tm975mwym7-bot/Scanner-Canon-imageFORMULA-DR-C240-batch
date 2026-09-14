@@ -1,11 +1,65 @@
-# Scannen per Batchdatei — Canon imageFORMULA DR-C240
+# Scannen unter Windows — Canon imageFORMULA DR-C240
 
-`Scan.bat` startet einen Scan auf dem Canon imageFORMULA DR-C240 (oder einem
-anderen WIA-fähigen Scanner) und legt das Ergebnis unter **Eigene Dokumente\Scans**
-ab — standardmäßig als mehrseitige PDF-Datei.
+Zwei Dateien, die zusammengehören und im **selben Ordner** liegen müssen:
 
-Es wird nichts zusätzlich installiert: Die Datei nutzt nur Bordmittel von
-Windows 10/11 (Windows-Bilderfassung/WIA und Windows PowerShell).
+| Datei | Zweck |
+|---|---|
+| **`Scanner.bat`** | kleines Fenster mit den wichtigsten Einstellungen — Zielordner einmal einstellen, danach nur noch auf *Scannen* klicken |
+| **`Scan.bat`** | die eigentliche Scan-Funktion; läuft auch allein auf der Kommandozeile und wird vom Fenster aufgerufen |
+
+Beides sind reine Bordmittel-Lösungen: Windows-Bilderfassung (WIA) und Windows
+PowerShell, keine Zusatzsoftware, keine Installation. Das Ergebnis landet
+standardmäßig als mehrseitige PDF-Datei unter **Eigene Dokumente\Scans**.
+
+---
+
+# 1. Das Fenster: `Scanner.bat`
+
+Doppelklick auf `Scanner.bat` öffnet:
+
+```
+┌─ Scannen ──────────────────────────────────────────────┐
+│  Scanner: [ CANON DR-C240              ▾ ]  [ Suchen ] │
+│                                                        │
+│ ┌ Ausgabe ─────────────────────────────────────────┐   │
+│ │ (•) PDF (mehrseitig)   ( ) Bilddateien  [JPG ▾]  │   │
+│ │ Farbe: [Farbe ▾]  Auflösung: [300 ▾] dpi         │   │
+│ │ [ ] Vorder- und Rückseite                        │   │
+│ └──────────────────────────────────────────────────┘   │
+│ ┌ Ablage ──────────────────────────────────────────┐   │
+│ │ Ordner: [C:\Users\...\Documents\Scans] [ Wählen ] │   │
+│ │ Name:   [Scan        ]  -> Scan_2026-09-14_1530… │   │
+│ │ [x] Ergebnis nach dem Scan öffnen                │   │
+│ └──────────────────────────────────────────────────┘   │
+│  [ Scannen ] [Abbrechen] [Ergebnis zeigen] [ Ordner ]  │
+│  Bereit.                                               │
+│ ┌──────────────────────────────────────────────────┐   │
+│ │ Seite 1 wird gescannt ... fertig                 │   │
+│ │ Seite 2 wird gescannt ... fertig                 │   │
+│ └──────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────┘
+```
+
+* **Einmal einstellen, immer gültig:** Zielordner, Format, Farbe, Auflösung,
+  Duplex, Dateiname und die Scannerauswahl werden gespeichert und beim nächsten
+  Start wieder verwendet. Die Einstellungen liegen in
+  `%APPDATA%\Scan-DR-C240\einstellungen.json`.
+* Während des Scans bleibt das Fenster bedienbar, der Fortschritt läuft unten
+  mit, und *Abbrechen* stoppt den Vorgang.
+* *Ergebnis zeigen* öffnet den Explorer mit der fertigen Datei, *Ordner* den
+  Zielordner.
+
+Für den Start ohne kurz aufblitzendes Konsolenfenster: Rechtsklick auf
+`Scanner.bat` → *Verknüpfung erstellen*, dann in den Eigenschaften der
+Verknüpfung *Ausführen: Minimiert* wählen. Die Verknüpfung lässt sich auch an
+Startmenü oder Taskleiste anheften.
+
+---
+
+# 2. Die Kommandozeile: `Scan.bat`
+
+Für feste Abläufe, Verknüpfungen mit vorgegebenen Schaltern und die
+Aufgabenplanung — und als Motor hinter dem Fenster.
 
 ## Schnellstart
 
@@ -93,6 +147,7 @@ C:\Tools\Scan.bat /duplex /grau /dpi 200 /name Posteingang
 * Canon-Treiber für den DR-C240 installiert (im Canon-Setup enthalten); das
   Gerät muss im Geräte-Manager unter *Bildverarbeitungsgeräte* erscheinen
 * Dienst *Windows-Bilderfassung (WIA)* läuft (Standard bei Windows)
+* `Scanner.bat` und `Scan.bat` im selben Ordner
 
 ## Problembehandlung
 
@@ -112,6 +167,10 @@ Eine andere Anwendung belegt das Gerät. Canon CaptureOnTouch, Windows-Fax und
 Beim Doppelklick bleibt das Fenster bis zum Tastendruck offen. Schließt es sich
 trotzdem, `Scan.bat` in einer Eingabeaufforderung starten — dann bleiben alle
 Meldungen sichtbar.
+
+**„Scan.bat wurde nicht gefunden“**
+`Scanner.bat` erwartet `Scan.bat` im selben Ordner. Beide Dateien zusammen
+kopieren — nicht nur die Verknüpfung.
 
 **Der Scan ist abgeschnitten**
 Das Gerät meldet einen zu kleinen Scanbereich. Mit einer anderen Auflösung
@@ -135,12 +194,17 @@ betroffen.
 | 9 | PowerShell nicht gefunden |
 
 Damit lässt sich der Aufruf auch in eigene Skripte oder in die Aufgabenplanung
-einbinden.
+einbinden. Beim Doppelklick wartet `Scan.bat` am Ende auf einen Tastendruck;
+wird die Umgebungsvariable `SCAN_NOPAUSE=1` gesetzt, entfällt das Warten — so
+ruft auch `Scanner.bat` die Datei auf.
 
 ## Technische Hinweise
 
-`Scan.bat` ist eine Batch-/PowerShell-Hybriddatei: Der Batch-Teil setzt die
-Codepage und startet den PowerShell-Teil, der in derselben Datei steht.
+Beide Dateien sind Batch-/PowerShell-Hybride: Der Batch-Teil startet jeweils
+den PowerShell-Teil, der in derselben Datei steht. `Scanner.bat` baut die
+Oberfläche mit Windows Forms auf und startet `Scan.bat` als eigenen Prozess —
+deshalb friert das Fenster während des Scannens nicht ein und der Vorgang lässt
+sich abbrechen. Die Scan-Logik gibt es also nur einmal.
 
 * Der Scan läuft über **WIA** (`WIA.DeviceManager`); Einzug, Duplex, Farbmodus,
   Auflösung und Scanbereich werden über die WIA-Eigenschaften gesetzt. Nach

@@ -20,6 +20,8 @@ set "SCAN_ARGS=%*"
 rem --- Wurde die Datei per Doppelklick gestartet? Dann am Ende Fenster offen halten
 set "SCAN_PAUSE="
 echo "%cmdcmdline%" | find /i "%~nx0" >nul 2>&1 && set "SCAN_PAUSE=1"
+rem --- SCAN_NOPAUSE=1 unterdrueckt das Warten (z.B. beim Aufruf aus Scanner.bat)
+if defined SCAN_NOPAUSE set "SCAN_PAUSE="
 
 rem --- Codepage auf UTF-8 umstellen (fuer Umlaute), alte Codepage merken
 set "SCAN_OLDCP="
