@@ -3,6 +3,9 @@ rem ===========================================================================
 rem  Scan.bat - Scannen mit dem Canon imageFORMULA DR-C240 (oder jedem anderen
 rem  WIA-faehigen Scanner) unter Windows 10/11.
 rem
+rem  Entwickelt von der IDO GmbH
+rem  Anderslebener Str. 40, 39387 Oschersleben
+rem
 rem  Das Ergebnis wird standardmaessig als mehrseitige PDF-Datei unter
 rem  "Eigene Dokumente\Scans" abgelegt.
 rem
@@ -127,6 +130,9 @@ BEISPIELE
   Scan.bat /duplex /grau /dpi 200 /name Rechnung
   Scan.bat /jpg /dpi 600 /ordner "D:\Archiv"
   Scan.bat /liste
+
+HERAUSGEBER
+  IDO GmbH - Anderslebener Str. 40 - 39387 Oschersleben
 '@ | Write-Host
 }
 

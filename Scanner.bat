@@ -2,11 +2,15 @@
 rem ===========================================================================
 rem  Scanner.bat - kleines Fenster-Programm zum Scannen (Canon DR-C240)
 rem
+rem  Entwickelt von der IDO GmbH
+rem  Anderslebener Str. 40, 39387 Oschersleben
+rem
 rem  Zeigt eine Oberflaeche mit den wichtigsten Einstellungen (PDF oder Bild,
 rem  Farbe, Aufloesung, Duplex, Zielordner). Der Zielordner und alle anderen
 rem  Einstellungen werden gemerkt und beim naechsten Start wieder verwendet.
 rem
 rem  Gescannt wird ueber Scan.bat, das im selben Ordner liegen muss.
+rem  Liegt eine Datei logo.png im selben Ordner, erscheint sie im Fensterkopf.
 rem ===========================================================================
 
 setlocal enableextensions
@@ -28,6 +32,12 @@ endlocal & exit /b 0
 #  Oberflaeche (Windows Forms) fuer Scan.bat
 # ===========================================================================
 $ErrorActionPreference = 'Stop'
+
+# --- Herausgeber ------------------------------------------------------------
+$script:Firma      = 'IDO GmbH'
+$script:Strasse    = 'Anderslebener Str. 40'
+$script:Ort        = '39387 Oschersleben'
+$script:Jahr       = '2026'
 
 $script:EigenerPfad  = $env:GUI_SELF
 $script:Ordner       = Split-Path -Parent $script:EigenerPfad
@@ -144,6 +154,39 @@ function Get-ScannerNamen {
 }
 
 # ---------------------------------------------------------------------------
+# Firmenlogo suchen und laden (logo.png/.jpg/.bmp/.gif im Programmordner)
+# ---------------------------------------------------------------------------
+function Get-LogoDatei {
+    foreach ($name in @('logo.png', 'logo.jpg', 'logo.jpeg', 'logo.bmp', 'logo.gif')) {
+        $pfad = [IO.Path]::Combine($script:Ordner, $name)
+        if (Test-Path -LiteralPath $pfad -PathType Leaf) { return $pfad }
+    }
+    return $null
+}
+
+function Get-LogoBild([string]$pfad) {
+    # ueber einen Speicherstrom laden, damit die Datei nicht gesperrt bleibt
+    $bytes = [IO.File]::ReadAllBytes($pfad)
+    $strom = New-Object IO.MemoryStream(,$bytes)
+    return [System.Drawing.Image]::FromStream($strom)
+}
+
+# Breites Logo mittig in ein quadratisches Fenstersymbol einpassen
+function New-SymbolAusBild($bild, [int]$kante) {
+    $quadrat = New-Object System.Drawing.Bitmap($kante, $kante)
+    $g = [System.Drawing.Graphics]::FromImage($quadrat)
+    try {
+        $g.Clear([System.Drawing.Color]::Transparent)
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $faktor = [Math]::Min($kante / $bild.Width, $kante / $bild.Height)
+        $breite = [int]($bild.Width * $faktor)
+        $hoehe  = [int]($bild.Height * $faktor)
+        $g.DrawImage($bild, [int](($kante - $breite) / 2), [int](($kante - $hoehe) / 2), $breite, $hoehe)
+    } finally { $g.Dispose() }
+    return $quadrat
+}
+
+# ---------------------------------------------------------------------------
 # Oberflaeche
 # ---------------------------------------------------------------------------
 Add-Type -AssemblyName System.Windows.Forms
@@ -154,27 +197,85 @@ $e = Get-Einstellungen
 
 $form                 = New-Object System.Windows.Forms.Form
 $form.Text            = 'Scannen'
-$form.Size            = New-Object System.Drawing.Size(580, 560)
-$form.MinimumSize     = New-Object System.Drawing.Size(580, 480)
+$form.ClientSize      = New-Object System.Drawing.Size(562, 600)
+$form.MinimumSize     = New-Object System.Drawing.Size(578, 560)
 $form.StartPosition   = 'CenterScreen'
 $form.Font            = New-Object System.Drawing.Font('Segoe UI', 9)
 $form.AutoScaleMode   = [System.Windows.Forms.AutoScaleMode]::Dpi
+$form.BackColor       = [System.Drawing.Color]::FromArgb(243, 243, 243)
+
+$firmenBlau = [System.Drawing.Color]::FromArgb(43, 74, 155)
+
+# --- Kopfbereich mit Firmenlogo ---------------------------------------------
+$pnlKopf           = New-Object System.Windows.Forms.Panel
+$pnlKopf.Location  = New-Object System.Drawing.Point(0, 0)
+$pnlKopf.Size      = New-Object System.Drawing.Size(562, 72)
+$pnlKopf.Anchor    = 'Top,Left,Right'
+$pnlKopf.BackColor = [System.Drawing.Color]::White
+
+$logoDatei = Get-LogoDatei
+$logoBild  = $null
+if ($logoDatei) {
+    try { $logoBild = Get-LogoBild $logoDatei } catch { $logoBild = $null }
+}
+
+if ($logoBild) {
+    $picLogo           = New-Object System.Windows.Forms.PictureBox
+    $picLogo.Location  = New-Object System.Drawing.Point(16, 11)
+    $picLogo.Size      = New-Object System.Drawing.Size(196, 50)
+    $picLogo.SizeMode  = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
+    $picLogo.Image     = $logoBild
+    $pnlKopf.Controls.Add($picLogo)
+    try { $form.Icon = [System.Drawing.Icon]::FromHandle((New-SymbolAusBild $logoBild 32).GetHicon()) } catch { }
+} else {
+    # ohne Logodatei bleibt der Firmenname als Schriftzug stehen
+    $lblLogo           = New-Object System.Windows.Forms.Label
+    $lblLogo.Text      = $script:Firma
+    $lblLogo.Location  = New-Object System.Drawing.Point(16, 18)
+    $lblLogo.Size      = New-Object System.Drawing.Size(196, 36)
+    $lblLogo.Font      = New-Object System.Drawing.Font('Segoe UI', 16, [System.Drawing.FontStyle]::Bold)
+    $lblLogo.ForeColor = $firmenBlau
+    $pnlKopf.Controls.Add($lblLogo)
+}
+
+$lblTitel           = New-Object System.Windows.Forms.Label
+$lblTitel.Text      = 'Scannen'
+$lblTitel.Location  = New-Object System.Drawing.Point(228, 13)
+$lblTitel.Size      = New-Object System.Drawing.Size(320, 26)
+$lblTitel.Font      = New-Object System.Drawing.Font('Segoe UI', 13, [System.Drawing.FontStyle]::Bold)
+$lblTitel.ForeColor = $firmenBlau
+
+$lblUnter           = New-Object System.Windows.Forms.Label
+$lblUnter.Text      = 'Canon imageFORMULA DR-C240'
+$lblUnter.Location  = New-Object System.Drawing.Point(230, 41)
+$lblUnter.Size      = New-Object System.Drawing.Size(320, 20)
+$lblUnter.ForeColor = [System.Drawing.Color]::DimGray
+
+$pnlKopf.Controls.AddRange(@($lblTitel, $lblUnter))
+
+$lblLinie           = New-Object System.Windows.Forms.Label
+$lblLinie.Location  = New-Object System.Drawing.Point(0, 72)
+$lblLinie.Size      = New-Object System.Drawing.Size(562, 1)
+$lblLinie.Anchor    = 'Top,Left,Right'
+$lblLinie.BackColor = [System.Drawing.Color]::FromArgb(214, 214, 214)
+
+$form.Controls.AddRange(@($pnlKopf, $lblLinie))
 
 # --- Scannerauswahl ---------------------------------------------------------
 $lblGeraet          = New-Object System.Windows.Forms.Label
 $lblGeraet.Text     = 'Scanner:'
-$lblGeraet.Location = New-Object System.Drawing.Point(18, 22)
+$lblGeraet.Location = New-Object System.Drawing.Point(18, 93)
 $lblGeraet.Size     = New-Object System.Drawing.Size(70, 20)
 
 $cmbGeraet          = New-Object System.Windows.Forms.ComboBox
-$cmbGeraet.Location = New-Object System.Drawing.Point(90, 18)
+$cmbGeraet.Location = New-Object System.Drawing.Point(90, 89)
 $cmbGeraet.Size     = New-Object System.Drawing.Size(330, 24)
 $cmbGeraet.DropDownStyle = 'DropDownList'
 $cmbGeraet.Anchor   = 'Top,Left,Right'
 
 $btnAktual          = New-Object System.Windows.Forms.Button
 $btnAktual.Text     = 'Suchen'
-$btnAktual.Location = New-Object System.Drawing.Point(430, 17)
+$btnAktual.Location = New-Object System.Drawing.Point(430, 88)
 $btnAktual.Size     = New-Object System.Drawing.Size(110, 26)
 $btnAktual.Anchor   = 'Top,Right'
 
@@ -183,7 +284,7 @@ $form.Controls.AddRange(@($lblGeraet, $cmbGeraet, $btnAktual))
 # --- Gruppe: Ausgabe --------------------------------------------------------
 $grpAusgabe          = New-Object System.Windows.Forms.GroupBox
 $grpAusgabe.Text     = ' Ausgabe '
-$grpAusgabe.Location = New-Object System.Drawing.Point(18, 55)
+$grpAusgabe.Location = New-Object System.Drawing.Point(18, 124)
 $grpAusgabe.Size     = New-Object System.Drawing.Size(522, 105)
 $grpAusgabe.Anchor   = 'Top,Left,Right'
 
@@ -242,7 +343,7 @@ $form.Controls.Add($grpAusgabe)
 # --- Gruppe: Ablage ---------------------------------------------------------
 $grpAblage          = New-Object System.Windows.Forms.GroupBox
 $grpAblage.Text     = ' Ablage '
-$grpAblage.Location = New-Object System.Drawing.Point(18, 170)
+$grpAblage.Location = New-Object System.Drawing.Point(18, 239)
 $grpAblage.Size     = New-Object System.Drawing.Size(522, 120)
 $grpAblage.Anchor   = 'Top,Left,Right'
 
@@ -287,25 +388,25 @@ $form.Controls.Add($grpAblage)
 # --- Schaltflaechen ---------------------------------------------------------
 $btnScan          = New-Object System.Windows.Forms.Button
 $btnScan.Text     = 'Scannen'
-$btnScan.Location = New-Object System.Drawing.Point(18, 302)
+$btnScan.Location = New-Object System.Drawing.Point(18, 371)
 $btnScan.Size     = New-Object System.Drawing.Size(150, 38)
 $btnScan.Font     = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
 
 $btnAbbruch          = New-Object System.Windows.Forms.Button
 $btnAbbruch.Text     = 'Abbrechen'
-$btnAbbruch.Location = New-Object System.Drawing.Point(176, 302)
+$btnAbbruch.Location = New-Object System.Drawing.Point(176, 371)
 $btnAbbruch.Size     = New-Object System.Drawing.Size(110, 38)
 $btnAbbruch.Enabled  = $false
 
 $btnZeigen          = New-Object System.Windows.Forms.Button
 $btnZeigen.Text     = 'Ergebnis zeigen'
-$btnZeigen.Location = New-Object System.Drawing.Point(294, 302)
+$btnZeigen.Location = New-Object System.Drawing.Point(294, 371)
 $btnZeigen.Size     = New-Object System.Drawing.Size(130, 38)
 $btnZeigen.Enabled  = $false
 
 $btnOrdner          = New-Object System.Windows.Forms.Button
 $btnOrdner.Text     = 'Ordner'
-$btnOrdner.Location = New-Object System.Drawing.Point(432, 302)
+$btnOrdner.Location = New-Object System.Drawing.Point(432, 371)
 $btnOrdner.Size     = New-Object System.Drawing.Size(108, 38)
 $btnOrdner.Anchor   = 'Top,Right'
 
@@ -314,12 +415,12 @@ $form.Controls.AddRange(@($btnScan, $btnAbbruch, $btnZeigen, $btnOrdner))
 # --- Statusbereich ----------------------------------------------------------
 $lblStatus          = New-Object System.Windows.Forms.Label
 $lblStatus.Text     = 'Bereit.'
-$lblStatus.Location = New-Object System.Drawing.Point(18, 350)
+$lblStatus.Location = New-Object System.Drawing.Point(18, 418)
 $lblStatus.Size     = New-Object System.Drawing.Size(522, 20)
 $lblStatus.Anchor   = 'Top,Left,Right'
 
 $txtLog             = New-Object System.Windows.Forms.TextBox
-$txtLog.Location    = New-Object System.Drawing.Point(18, 373)
+$txtLog.Location    = New-Object System.Drawing.Point(18, 440)
 $txtLog.Size        = New-Object System.Drawing.Size(522, 130)
 $txtLog.Multiline   = $true
 $txtLog.ReadOnly    = $true
@@ -328,7 +429,16 @@ $txtLog.BackColor   = [System.Drawing.Color]::White
 $txtLog.Font        = New-Object System.Drawing.Font('Consolas', 9)
 $txtLog.Anchor      = 'Top,Bottom,Left,Right'
 
-$form.Controls.AddRange(@($lblStatus, $txtLog))
+# --- Fusszeile mit Herausgeber ----------------------------------------------
+$lblFuss           = New-Object System.Windows.Forms.Label
+$lblFuss.Text      = "$($script:Firma)  -  $($script:Strasse)  -  $($script:Ort)"
+$lblFuss.Location  = New-Object System.Drawing.Point(18, 578)
+$lblFuss.Size      = New-Object System.Drawing.Size(522, 18)
+$lblFuss.Anchor    = 'Bottom,Left,Right'
+$lblFuss.ForeColor = [System.Drawing.Color]::Gray
+$lblFuss.Font      = New-Object System.Drawing.Font('Segoe UI', 8)
+
+$form.Controls.AddRange(@($lblStatus, $txtLog, $lblFuss))
 
 # ---------------------------------------------------------------------------
 # Zustand

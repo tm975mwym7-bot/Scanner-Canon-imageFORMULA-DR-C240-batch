@@ -1,4 +1,8 @@
+<img src="logo.png" alt="IDO GmbH" width="260">
+
 # Scannen unter Windows — Canon imageFORMULA DR-C240
+
+Entwickelt von der **IDO GmbH**, Anderslebener Str. 40, 39387 Oschersleben.
 
 Zwei Dateien, die zusammengehören und im **selben Ordner** liegen müssen:
 
@@ -48,6 +52,13 @@ Doppelklick auf `Scanner.bat` öffnet:
   mit, und *Abbrechen* stoppt den Vorgang.
 * *Ergebnis zeigen* öffnet den Explorer mit der fertigen Datei, *Ordner* den
   Zielordner.
+
+### Logo im Fenster
+
+Liegt im Programmordner eine Datei **`logo.png`** (alternativ `logo.jpg`,
+`logo.bmp` oder `logo.gif`), zeigt `Scanner.bat` sie oben links im Fensterkopf
+und verwendet sie als Fenstersymbol. Ohne diese Datei steht dort der Schriftzug
+*IDO GmbH*. Es ist nichts einzustellen — Datei dazulegen genügt.
 
 Für den Start ohne kurz aufblitzendes Konsolenfenster: Rechtsklick auf
 `Scanner.bat` → *Verknüpfung erstellen*, dann in den Eigenschaften der
@@ -215,3 +226,13 @@ sich abbrechen. Die Scan-Logik gibt es also nur einmal.
   erneutes Komprimieren als `DCTDecode`-Bilder eingebettet, die Seitengröße
   ergibt sich aus Pixelmaß und Auflösung (300 dpi, A4 → 595 × 842 pt).
   Es wird also keine zusätzliche PDF-Software benötigt.
+
+---
+
+## Entwickler
+
+**IDO GmbH**  
+Anderslebener Str. 40  
+39387 Oschersleben
+
+© 2026 IDO GmbH
