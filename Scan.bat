@@ -5,6 +5,7 @@ rem  WIA-faehigen Scanner) unter Windows 10/11.
 rem
 rem  Entwickelt von der IDO GmbH
 rem  Anderslebener Str. 40, 39387 Oschersleben
+rem  (c) 2026 IDO GmbH - alle Rechte vorbehalten
 rem
 rem  Das Ergebnis wird standardmaessig als mehrseitige PDF-Datei unter
 rem  "Eigene Dokumente\Scans" abgelegt.
@@ -55,6 +56,12 @@ endlocal & exit /b %SCAN_RC%
 # ===========================================================================
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
+
+# --- Herausgeber ------------------------------------------------------------
+$script:Firma     = 'IDO GmbH'
+$script:Jahr      = '2026'
+$script:Copyright = [string]([char]0x00A9) + " $script:Jahr $script:Firma"
+$script:Programm  = 'Scan.bat'
 
 # ---------------------------------------------------------------------------
 # Konstanten (WIA-Eigenschafts-IDs)
@@ -115,6 +122,10 @@ FARBE
 WEITERE OPTIONEN
   /dpi <Zahl>       Aufloesung, z.B. 150, 200, 300, 400, 600 (Standard: 300)
   /duplex           Vorder- und Rueckseite scannen
+  /gerade           schraeg eingezogene Seiten automatisch gerade richten
+  /drehen <Grad>    alle Seiten fest drehen: 0, 90, 180 oder 270
+  /leerseiten       leere Seiten (z.B. unbedruckte Rueckseiten) weglassen
+  /leerwert <Zahl>  Empfindlichkeit dafuer in Promille (Standard: 1.5)
   /name <Text>      Namensbestandteil der Zieldatei (Standard: Scan)
   /ordner <Pfad>    abweichender Zielordner
   /seiten <Zahl>    hoechstens so viele Seiten einziehen (0 = alle)
@@ -133,6 +144,7 @@ BEISPIELE
 
 HERAUSGEBER
   IDO GmbH - Anderslebener Str. 40 - 39387 Oschersleben
+  (c) 2026 IDO GmbH - alle Rechte vorbehalten
 '@ | Write-Host
 }
 
@@ -252,10 +264,273 @@ function Convert-Bild([string]$quelle, [string]$ziel, [string]$format, [int]$qua
 }
 
 # ---------------------------------------------------------------------------
+# Leere Seiten erkennen
+#
+# Die Seite wird auf eine kleine Vorschau verkleinert und darin der Anteil
+# dunkler Bildpunkte gezaehlt. Ein schmaler Rand bleibt aussen vor, weil der
+# Einzug dort haeufig Schatten oder Streifen hinterlaesst.
+# ---------------------------------------------------------------------------
+$script:LeerZaehlerBereit = $false
+$script:LeerBlockGrenze   = 0.004   # 0,4 % dunkle Punkte in einem Feld = Inhalt
+$script:LeerFelder        = 12      # Raster fuer die Feldpruefung
+$script:LeerRand          = 0.07    # Rand ausserhalb der Pruefung (Lochung, Schatten)
+$script:LeerSchwelle      = 200     # dunkler als das gilt als Inhalt
+
+function Initialisiere-LeerZaehler {
+    if ($script:LeerZaehlerBereit) { return $true }
+    try {
+        Add-Type -TypeDefinition @'
+public static class SeitenPruefer
+{
+    // Liefert { Anteil dunkler Punkte insgesamt, groesster Anteil in einem Feld }
+    public static double[] Werte(byte[] puffer, int stride, int breite, int hoehe,
+                                 int randX, int randY, int schwelle, int felder)
+    {
+        long dunkel = 0, gesamt = 0;
+        int fx = (breite - 2 * randX) / felder; if (fx < 1) { fx = 1; }
+        int fy = (hoehe  - 2 * randY) / felder; if (fy < 1) { fy = 1; }
+        long[] feldDunkel = new long[felder * felder];
+        long[] feldGesamt = new long[felder * felder];
+
+        for (int y = randY; y < hoehe - randY; y++)
+        {
+            int zeile = y * stride;
+            int iy = (y - randY) / fy; if (iy >= felder) { iy = felder - 1; }
+            for (int x = randX; x < breite - randX; x++)
+            {
+                int i = zeile + x * 3;
+                int hell = (puffer[i] + puffer[i + 1] + puffer[i + 2]) / 3;
+                int ix = (x - randX) / fx; if (ix >= felder) { ix = felder - 1; }
+                int k = iy * felder + ix;
+                gesamt++; feldGesamt[k]++;
+                if (hell < schwelle) { dunkel++; feldDunkel[k]++; }
+            }
+        }
+        double maxFeld = 0.0;
+        for (int k = 0; k < feldDunkel.Length; k++)
+        {
+            if (feldGesamt[k] > 50)
+            {
+                double a = (double)feldDunkel[k] / feldGesamt[k];
+                if (a > maxFeld) { maxFeld = a; }
+            }
+        }
+        double ges = gesamt == 0 ? 0.0 : (double)dunkel / gesamt;
+        return new double[] { ges, maxFeld };
+    }
+
+    // --- Schraeglauf messen -------------------------------------------------
+    // Alle Textpunkte werden gescherrt und das Zeilenprofil gebildet; beim
+    // richtigen Winkel liegen die Zeilen genau uebereinander, das Profil hat
+    // dann die groesste Streuung.
+    private static int[] Punkte(byte[] p, int stride, int b, int h, int schwelle, out int anzahl)
+    {
+        int[] xy = new int[b * h * 2];
+        int n = 0;
+        for (int y = 0; y < h; y++)
+        {
+            int z = y * stride;
+            for (int x = 0; x < b; x++)
+            {
+                if (p[z + x * 3] < schwelle) { xy[n * 2] = x; xy[n * 2 + 1] = y; n++; }
+            }
+        }
+        anzahl = n;
+        return xy;
+    }
+
+    private static double Streuung(int[] xy, int n, int b, int h, double tang)
+    {
+        int off = (int)Math.Abs(tang * b) + 1;
+        int zeilen = h + 2 * off + 2;
+        long[] profil = new long[zeilen];
+        for (int i = 0; i < n; i++)
+        {
+            int x = xy[i * 2], y = xy[i * 2 + 1];
+            int yy = y + off + (int)Math.Round(tang * (x - b / 2.0));
+            if (yy >= 0 && yy < zeilen) { profil[yy]++; }
+        }
+        double summe = 0, quadrat = 0;
+        for (int i = 0; i < zeilen; i++) { summe += profil[i]; quadrat += (double)profil[i] * profil[i]; }
+        double mittel = summe / zeilen;
+        return quadrat / zeilen - mittel * mittel;
+    }
+
+    public static double BesterWinkel(byte[] p, int stride, int b, int h, int schwelle,
+                                      double grenze, double schritt)
+    {
+        int n;
+        int[] xy = Punkte(p, stride, b, h, schwelle, out n);
+        if (n < 200) { return 0.0; }          // zu wenig Inhalt fuer eine Messung
+        double bester = 0.0, bestWert = -1.0;
+        for (double w = -grenze; w <= grenze + 1e-9; w += schritt)
+        {
+            double v = Streuung(xy, n, b, h, Math.Tan(w * Math.PI / 180.0));
+            if (v > bestWert) { bestWert = v; bester = w; }
+        }
+        for (double w = bester - schritt; w <= bester + schritt + 1e-9; w += schritt / 5.0)
+        {
+            double v = Streuung(xy, n, b, h, Math.Tan(w * Math.PI / 180.0));
+            if (v > bestWert) { bestWert = v; bester = w; }
+        }
+        return bester;
+    }
+}
+'@ -ErrorAction Stop
+        $script:LeerZaehlerBereit = $true
+    } catch {
+        $script:LeerZaehlerBereit = $false
+    }
+    return $script:LeerZaehlerBereit
+}
+
+# Bild einlesen, ohne die Datei zu sperren
+function Get-BildAusDatei([string]$pfad) {
+    $bytes = [IO.File]::ReadAllBytes($pfad)
+    $strom = New-Object IO.MemoryStream(,$bytes)
+    return [System.Drawing.Image]::FromStream($strom)
+}
+
+# Verkleinerte Vorschau als Bildpunkt-Puffer (24 Bit) fuer die Auswertungen
+function Get-Vorschau([string]$pfad, [int]$breite) {
+    Add-Type -AssemblyName System.Drawing | Out-Null
+    $quelle = Get-BildAusDatei $pfad
+    try {
+        $hoehe = [int][Math]::Round($quelle.Height * $breite / [double]$quelle.Width)
+        if ($hoehe -lt 32) { $hoehe = 32 }
+        $klein = New-Object System.Drawing.Bitmap($breite, $hoehe, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+        try {
+            $g = [System.Drawing.Graphics]::FromImage($klein)
+            try {
+                $g.Clear([System.Drawing.Color]::White)
+                $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $g.DrawImage($quelle, 0, 0, $breite, $hoehe)
+            } finally { $g.Dispose() }
+
+            $bereich = New-Object System.Drawing.Rectangle(0, 0, $breite, $hoehe)
+            $daten = $klein.LockBits($bereich, [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
+                                     [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+            try {
+                $stride = $daten.Stride
+                $puffer = New-Object byte[] ($stride * $hoehe)
+                [System.Runtime.InteropServices.Marshal]::Copy($daten.Scan0, $puffer, 0, $puffer.Length)
+            } finally { $klein.UnlockBits($daten) }
+            return @{ Puffer = $puffer; Stride = $stride; Breite = $breite; Hoehe = $hoehe }
+        } finally { $klein.Dispose() }
+    } finally { $quelle.Dispose() }
+}
+
+# Liefert @(Gesamtanteil, groesster Feldanteil) einer Seite - beide 0 bis 1
+function Get-SeitenWerte([string]$pfad) {
+    $schnell = Initialisiere-LeerZaehler
+    $breite  = 300
+    if (-not $schnell) { $breite = 150 }   # ohne Hilfsklasse kleiner rechnen
+    $v = Get-Vorschau $pfad $breite
+    $puffer = $v.Puffer; $stride = $v.Stride; $breite = $v.Breite; $hoehe = $v.Hoehe
+    $randX = [int]($breite * $script:LeerRand)
+    $randY = [int]($hoehe  * $script:LeerRand)
+
+    if ($schnell) {
+        return [SeitenPruefer]::Werte($puffer, $stride, $breite, $hoehe, $randX, $randY,
+                                      $script:LeerSchwelle, $script:LeerFelder)
+    }
+
+    # Ersatzweg ohne Hilfsklasse: gleiche Rechnung in PowerShell
+    $felder = $script:LeerFelder
+    $fx = [Math]::Max(1, [int](($breite - 2*$randX) / $felder))
+    $fy = [Math]::Max(1, [int](($hoehe  - 2*$randY) / $felder))
+    $feldDunkel = New-Object 'int[]' ($felder * $felder)
+    $feldGesamt = New-Object 'int[]' ($felder * $felder)
+    $dunkel = 0; $gesamt = 0
+    for ($y = $randY; $y -lt ($hoehe - $randY); $y++) {
+        $zeile = $y * $stride
+        $iy = [Math]::Min($felder - 1, [int](($y - $randY) / $fy))
+        for ($x = $randX; $x -lt ($breite - $randX); $x++) {
+            $i = $zeile + $x * 3
+            $hell = ([int]$puffer[$i] + [int]$puffer[$i+1] + [int]$puffer[$i+2]) / 3
+            $k = $iy * $felder + [Math]::Min($felder - 1, [int](($x - $randX) / $fx))
+            $gesamt++; $feldGesamt[$k]++
+            if ($hell -lt $script:LeerSchwelle) { $dunkel++; $feldDunkel[$k]++ }
+        }
+    }
+    $maxFeld = 0.0
+    for ($k = 0; $k -lt $feldDunkel.Length; $k++) {
+        if ($feldGesamt[$k] -gt 50) {
+            $a = $feldDunkel[$k] / [double]$feldGesamt[$k]
+            if ($a -gt $maxFeld) { $maxFeld = $a }
+        }
+    }
+    $ges = 0.0
+    if ($gesamt -gt 0) { $ges = $dunkel / [double]$gesamt }
+    return @($ges, $maxFeld)
+}
+
+# ---------------------------------------------------------------------------
+# Schraeglauf messen und Seiten drehen
+# ---------------------------------------------------------------------------
+function Get-Schraeglauf([string]$pfad) {
+    if (-not (Initialisiere-LeerZaehler)) { return 0.0 }   # ohne Hilfsklasse zu langsam
+    $v = Get-Vorschau $pfad 600
+    return [SeitenPruefer]::BesterWinkel($v.Puffer, $v.Stride, $v.Breite, $v.Hoehe, 180, 8.0, 0.5)
+}
+
+# Dreht eine Seite und schreibt sie zurueck. Vielfache von 90 Grad werden
+# verlustfrei gedreht, dazwischen wird mit weissem Hintergrund gerechnet.
+function Drehe-Seite([string]$pfad, [double]$winkel, [int]$qualitaet) {
+    Add-Type -AssemblyName System.Drawing | Out-Null
+    $endung = [IO.Path]::GetExtension($pfad).ToLowerInvariant()
+    $quelle = Get-BildAusDatei $pfad
+    $ergebnis = $null
+    try {
+        $rest = [Math]::IEEERemainder($winkel, 90.0)
+        if ([Math]::Abs($rest) -lt 0.01) {
+            $viertel = [int][Math]::Round((($winkel % 360) + 360) % 360 / 90.0) % 4
+            if ($viertel -eq 0) { return }
+            $ergebnis = New-Object System.Drawing.Bitmap($quelle)
+            switch ($viertel) {
+                1 { $ergebnis.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipNone) }
+                2 { $ergebnis.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipNone) }
+                3 { $ergebnis.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipNone) }
+            }
+        } else {
+            $breite = $quelle.Width
+            $hoehe  = $quelle.Height
+            $ergebnis = New-Object System.Drawing.Bitmap($breite, $hoehe, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+            $ergebnis.SetResolution($quelle.HorizontalResolution, $quelle.VerticalResolution)
+            $g = [System.Drawing.Graphics]::FromImage($ergebnis)
+            try {
+                $g.Clear([System.Drawing.Color]::White)
+                $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $g.TranslateTransform($breite / 2.0, $hoehe / 2.0)
+                $g.RotateTransform($winkel)          # im Uhrzeigersinn - hebt den Schraeglauf auf
+                $g.TranslateTransform(-$breite / 2.0, -$hoehe / 2.0)
+                $g.DrawImage($quelle, 0, 0, $breite, $hoehe)
+            } finally { $g.Dispose() }
+        }
+    } finally { $quelle.Dispose() }
+
+    if ($null -eq $ergebnis) { return }
+    try {
+        switch ($endung) {
+            '.jpg' {
+                $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+                $ep = New-Object System.Drawing.Imaging.EncoderParameters(1)
+                $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [int64]$qualitaet)
+                $ergebnis.Save($pfad, $codec, $ep)
+                $ep.Dispose()
+            }
+            '.png' { $ergebnis.Save($pfad, [System.Drawing.Imaging.ImageFormat]::Png) }
+            default { $ergebnis.Save($pfad, [System.Drawing.Imaging.ImageFormat]::Bmp) }
+        }
+    } finally { $ergebnis.Dispose() }
+}
+
+# ---------------------------------------------------------------------------
 # Mehrseitiges PDF aus JPEG-Dateien bauen (JPEG wird direkt eingebettet)
 # ---------------------------------------------------------------------------
 function New-PdfAusJpeg([string[]]$bilder, [string]$zielDatei, [int]$dpi) {
-    $ascii  = [Text.Encoding]::ASCII
+    # ISO-8859-1: fuer ASCII identisch, erlaubt aber Zeichen wie (c) und Umlaute
+    $ascii  = [Text.Encoding]::GetEncoding(28591)
     $stream = New-Object System.IO.MemoryStream
     $offsets = @{}
     $ci = [Globalization.CultureInfo]::InvariantCulture
@@ -291,7 +566,8 @@ function New-PdfAusJpeg([string[]]$bilder, [string]$zielDatei, [int]$dpi) {
     }
 
     $anzahl      = $seiten.Count
-    $objektAnzahl = 2 + $anzahl * 3
+    $objektAnzahl = 2 + $anzahl * 3 + 1   # das letzte Objekt sind die Dokumentangaben
+    $objInfo     = $objektAnzahl
 
     # Objekt 1: Katalog
     $offsets[1] = $stream.Position
@@ -332,6 +608,24 @@ function New-PdfAusJpeg([string[]]$bilder, [string]$zielDatei, [int]$dpi) {
         & $schreibeText "`nendstream`nendobj`n"
     }
 
+    # Dokumentangaben (Programm und Herausgeber)
+    $pdfText = {
+        param([string]$roh)
+        return ($roh -replace '\\', '\\' -replace '\(', '\(' -replace '\)', '\)')
+    }
+    $zeitpunkt = Get-Date
+    $versatz = [TimeZoneInfo]::Local.GetUtcOffset($zeitpunkt)
+    $vorzeichen = '+'
+    if ($versatz.Ticks -lt 0) { $vorzeichen = '-' }
+    $datumPdf = "D:{0}{1}{2:00}'{3:00}'" -f $zeitpunkt.ToString('yyyyMMddHHmmss'), $vorzeichen,
+                [Math]::Abs($versatz.Hours), [Math]::Abs($versatz.Minutes)
+    $offsets[$objInfo] = $stream.Position
+    & $schreibeText ("$objInfo 0 obj`n<< /Producer (" + (& $pdfText "$script:Programm - $script:Firma") + ")" +
+                     " /Creator (" + (& $pdfText "$script:Programm - $script:Firma") + ")" +
+                     " /Author (" + (& $pdfText $script:Firma) + ")" +
+                     " /Subject (" + (& $pdfText $script:Copyright) + ")" +
+                     " /CreationDate ($datumPdf) /ModDate ($datumPdf) >>`nendobj`n")
+
     # Querverweistabelle
     $xrefPos = $stream.Position
     & $schreibeText "xref`n0 $($objektAnzahl + 1)`n"
@@ -339,7 +633,7 @@ function New-PdfAusJpeg([string[]]$bilder, [string]$zielDatei, [int]$dpi) {
     for ($n = 1; $n -le $objektAnzahl; $n++) {
         & $schreibeText ("{0:D10} 00000 n `n" -f [int64]$offsets[$n])
     }
-    & $schreibeText "trailer`n<< /Size $($objektAnzahl + 1) /Root 1 0 R >>`nstartxref`n$xrefPos`n%%EOF`n"
+    & $schreibeText "trailer`n<< /Size $($objektAnzahl + 1) /Root 1 0 R /Info $objInfo 0 R >>`nstartxref`n$xrefPos`n%%EOF`n"
 
     [IO.File]::WriteAllBytes($zielDatei, $stream.ToArray())
     $stream.Dispose()
@@ -364,6 +658,10 @@ $zielOrdner = $null
 $basisName  = 'Scan'
 $maxSeiten  = 0
 $qualitaet  = 80
+$geradeRichten = $false
+$festDrehen = 0
+$leerseiten = $false
+$leerWert   = 1.5          # Promille dunkler Bildpunkte
 $geraetFilter = $null
 $nurListe   = $false
 $oeffnen    = $false
@@ -400,6 +698,19 @@ try {
             'graustufen'{ $farbmodus = 'grau' }
             'sw'        { $farbmodus = 'sw' }
             'duplex'    { $duplex = $true }
+            'gerade'    { $geradeRichten = $true }
+            'drehen'    { $festDrehen = AlsZahl (Naechstes ([ref]$i) 'drehen') 'drehen' }
+            'leerseiten' { $leerseiten = $true }
+            'leerwert'  {
+                $roh = Naechstes ([ref]$i) 'leerwert'
+                $zahl = 0.0
+                if (-not [double]::TryParse(($roh -replace ',', '.'), [Globalization.NumberStyles]::Float,
+                        [Globalization.CultureInfo]::InvariantCulture, [ref]$zahl)) {
+                    throw "Der Wert '$roh' zur Option 'leerwert' ist keine Zahl."
+                }
+                $leerWert = $zahl
+                $leerseiten = $true
+            }
             'simplex'   { $duplex = $false }
             'liste'     { $nurListe = $true }
             'oeffnen'   { $oeffnen = $true }
@@ -423,6 +734,12 @@ try {
 if ($dpi -lt 50 -or $dpi -gt 1200) { Fehler "Die Aufloesung muss zwischen 50 und 1200 dpi liegen."; exit 2 }
 if ($qualitaet -lt 1 -or $qualitaet -gt 100) { Fehler "Die Qualitaet muss zwischen 1 und 100 liegen."; exit 2 }
 if ($maxSeiten -lt 0) { Fehler "Die Seitenzahl darf nicht negativ sein."; exit 2 }
+if ($leerWert -lt 0 -or $leerWert -gt 100) { Fehler "Der Wert fuer /leerwert muss zwischen 0 und 100 liegen."; exit 2 }
+$festDrehen = (($festDrehen % 360) + 360) % 360
+if ($festDrehen -ne 0 -and $festDrehen -ne 90 -and $festDrehen -ne 180 -and $festDrehen -ne 270) {
+    Fehler "Fuer /drehen sind nur 0, 90, 180 oder 270 moeglich."
+    exit 2
+}
 if ($wartenSek -lt 0) { $wartenSek = 0 }
 
 $ungueltig = [IO.Path]::GetInvalidFileNameChars()
@@ -588,7 +905,11 @@ if (-not $dpiGesetzt) {
 
 $modusText = switch ($farbmodus) { 'farbe' { 'Farbe' } 'grau' { 'Graustufen' } 'sw' { 'Schwarzweiss' } }
 $seitenText = if ($duplex) { 'Duplex' } else { 'Einseitig' }
-Info "Einstellungen: $modusText, $dpi dpi, $seitenText, Ausgabe: $($format.ToUpperInvariant())"
+$leerText = ''
+if ($geradeRichten) { $leerText += ', gerade richten' }
+if ($festDrehen -ne 0) { $leerText += ", um $festDrehen Grad drehen" }
+if ($leerseiten) { $leerText += ', leere Seiten weglassen' }
+Info "Einstellungen: $modusText, $dpi dpi, $seitenText, Ausgabe: $($format.ToUpperInvariant())$leerText"
 
 # ---------------------------------------------------------------------------
 # Transferformat waehlen
@@ -712,6 +1033,73 @@ if ($rohSeiten.Count -eq 0) {
 }
 
 # ---------------------------------------------------------------------------
+# Seiten ausrichten (feste Drehung und Schraeglauf)
+# ---------------------------------------------------------------------------
+if (($geradeRichten -or $festDrehen -ne 0) -and $rohSeiten.Count -gt 0) {
+    Info ""
+    Info "Seiten werden ausgerichtet ..."
+    $nummer = 0
+    foreach ($seite in $rohSeiten) {
+        $nummer++
+        try {
+            if ($festDrehen -ne 0) {
+                Drehe-Seite $seite $festDrehen $qualitaet
+            }
+            if ($geradeRichten) {
+                $winkel = [double](Get-Schraeglauf $seite)
+                if ([Math]::Abs($winkel) -ge 0.2) {
+                    Drehe-Seite $seite $winkel $qualitaet
+                    Info ("  Seite {0}: um {1:N1} Grad gerade gerichtet" -f $nummer, $winkel)
+                }
+            }
+        } catch {
+            Warn "Die Seiten konnten nicht ausgerichtet werden ($($_.Exception.Message.Trim()))."
+            break
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Leere Seiten aussortieren
+# ---------------------------------------------------------------------------
+$leereSeiten = 0
+if ($leerseiten -and $rohSeiten.Count -gt 0) {
+    Info ""
+    Info "Seiten werden auf Inhalt geprueft ..."
+    $grenze   = $leerWert / 1000.0
+    $behalten = @()
+    $nummer   = 0
+    $fehlgeschlagen = $false
+    foreach ($seite in $rohSeiten) {
+        $nummer++
+        try {
+            $werte = Get-SeitenWerte $seite
+        } catch {
+            Warn "Die Seiten konnten nicht geprueft werden - es wird nichts weggelassen."
+            $fehlgeschlagen = $true
+            break
+        }
+        # Leer ist eine Seite nur, wenn insgesamt kaum etwas da ist UND auch
+        # kein einzelnes Feld auffaellt - so bleibt ein kleines Kuerzel erhalten.
+        $istLeer = ([double]$werte[0] -lt $grenze) -and ([double]$werte[1] -lt $script:LeerBlockGrenze)
+        if ($istLeer) {
+            $leereSeiten++
+            Info ("  Seite {0}: leer ({1:N2} Promille) - wird weggelassen" -f $nummer, ($werte[0] * 1000))
+        } else {
+            $behalten += $seite
+        }
+    }
+    if ($fehlgeschlagen) {
+        $leereSeiten = 0
+    } elseif ($behalten.Count -eq 0) {
+        Warn "Alle Seiten wurden als leer erkannt - es wird nichts weggelassen."
+        $leereSeiten = 0
+    } else {
+        $rohSeiten = $behalten
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Ergebnis ablegen
 # ---------------------------------------------------------------------------
 try {
@@ -797,7 +1185,12 @@ Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyCon
 # Zusammenfassung
 # ---------------------------------------------------------------------------
 $seitenWort = if ($rohSeiten.Count -eq 1) { 'Seite' } else { 'Seiten' }
-Ok ("Fertig: {0} {1} gescannt." -f $rohSeiten.Count, $seitenWort)
+if ($leereSeiten -gt 0) {
+    $leerWort = if ($leereSeiten -eq 1) { 'leere Seite' } else { 'leere Seiten' }
+    Ok ("Fertig: {0} {1} gespeichert, {2} {3} weggelassen." -f $rohSeiten.Count, $seitenWort, $leereSeiten, $leerWort)
+} else {
+    Ok ("Fertig: {0} {1} gescannt." -f $rohSeiten.Count, $seitenWort)
+}
 if (Test-Path -LiteralPath $ergebnis -PathType Leaf) {
     $groesse = (Get-Item -LiteralPath $ergebnis).Length
     Info ("Datei:  {0}  ({1:N1} MB)" -f $ergebnis, ($groesse / 1MB))

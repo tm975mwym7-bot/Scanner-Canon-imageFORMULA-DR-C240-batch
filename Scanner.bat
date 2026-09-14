@@ -4,6 +4,7 @@ rem  Scanner.bat - kleines Fenster-Programm zum Scannen (Canon DR-C240)
 rem
 rem  Entwickelt von der IDO GmbH
 rem  Anderslebener Str. 40, 39387 Oschersleben
+rem  (c) 2026 IDO GmbH - alle Rechte vorbehalten
 rem
 rem  Zeigt eine Oberflaeche mit den wichtigsten Einstellungen (PDF oder Bild,
 rem  Farbe, Aufloesung, Duplex, Zielordner). Der Zielordner und alle anderen
@@ -43,6 +44,7 @@ $script:Firma      = 'IDO GmbH'
 $script:Strasse    = 'Anderslebener Str. 40'
 $script:Ort        = '39387 Oschersleben'
 $script:Jahr       = '2026'
+$script:Copyright  = [string]([char]0x00A9) + " $($script:Jahr) IDO GmbH"
 
 # --- Servicekennwort (SHA-256) ---------------------------------------------
 # Leer = noch nicht eingerichtet; dann fragt das Programm beim ersten Start
@@ -149,6 +151,8 @@ function Get-Einstellungen {
         Name      = 'Scan'
         Oeffnen   = $true
         Scanner   = ''
+        Gerade    = $false
+        Leerseiten = $false
         Kachel    = $true
         KachelX   = -1
         KachelY   = -1
@@ -163,6 +167,8 @@ function Get-Einstellungen {
             $e.Dpi     = [int]$e.Dpi
             $e.Duplex  = [bool]$e.Duplex
             $e.Oeffnen = [bool]$e.Oeffnen
+            $e.Gerade     = [bool]$e.Gerade
+            $e.Leerseiten = [bool]$e.Leerseiten
             $e.Kachel  = [bool]$e.Kachel
             $e.KachelX = [int]$e.KachelX
             $e.KachelY = [int]$e.KachelY
@@ -197,7 +203,9 @@ function New-ScanArgumente($e) {
     if ($e.Format -eq 'pdf') { $teile += '/pdf' } else { $teile += ('/' + $e.Bildart) }
     $teile += ('/' + $e.Farbe)
     $teile += '/dpi'; $teile += [string][int]$e.Dpi
-    if ($e.Duplex)  { $teile += '/duplex' }
+    if ($e.Duplex)     { $teile += '/duplex' }
+    if ($e.Gerade)     { $teile += '/gerade' }
+    if ($e.Leerseiten) { $teile += '/leerseiten' }
     if ($e.Oeffnen) { $teile += '/oeffnen' }
     if ("$($e.Name)".Trim())    { $teile += '/name';    $teile += ('"' + "$($e.Name)".Trim() + '"') }
     if ("$($e.Ziel)".Trim())    { $teile += '/ordner';  $teile += ('"' + "$($e.Ziel)".Trim() + '"') }
@@ -336,7 +344,7 @@ Add-Type -AssemblyName System.Drawing
 $e = Get-Einstellungen
 
 $script:HoeheKunde   = 330
-$script:HoeheService = 726
+$script:HoeheService = 744
 try {
     # auf kleinen Bildschirmen kuerzen; der Servicebereich bekommt dann eine Bildlaufleiste
     $platz = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 70
@@ -516,7 +524,7 @@ $form.Controls.Add($lblLinie2)
 # ===========================================================================
 $pnlService          = New-Object System.Windows.Forms.Panel
 $pnlService.Location = New-Object System.Drawing.Point(0, 296)
-$pnlService.Size     = New-Object System.Drawing.Size(620, 392)
+$pnlService.Size     = New-Object System.Drawing.Size(620, 410)
 $pnlService.Visible  = $false
 
 $lblService          = New-Object System.Windows.Forms.Label
@@ -619,19 +627,29 @@ $chkOeffnen.AutoSize = $true
 $grpAblage.Controls.AddRange(@($lblZiel, $txtZiel, $btnZiel, $lblName, $txtName, $lblMuster, $chkOeffnen))
 
 # --- Protokoll --------------------------------------------------------------
+$chkGerade          = New-Object System.Windows.Forms.CheckBox
+$chkGerade.Text     = 'Schräg eingezogene Seiten gerade richten'
+$chkGerade.Location = New-Object System.Drawing.Point(18, 246)
+$chkGerade.AutoSize = $true
+
+$chkLeer          = New-Object System.Windows.Forms.CheckBox
+$chkLeer.Text     = 'Leere Seiten weglassen'
+$chkLeer.Location = New-Object System.Drawing.Point(300, 246)
+$chkLeer.AutoSize = $true
+
 $chkKachel          = New-Object System.Windows.Forms.CheckBox
 $chkKachel.Text     = 'Kleines Fenster unten rechts anzeigen (immer im Vordergrund)'
-$chkKachel.Location = New-Object System.Drawing.Point(18, 250)
+$chkKachel.Location = New-Object System.Drawing.Point(18, 270)
 $chkKachel.AutoSize = $true
 
 $lblProt          = New-Object System.Windows.Forms.Label
 $lblProt.Text     = 'Protokoll:'
-$lblProt.Location = New-Object System.Drawing.Point(18, 276)
+$lblProt.Location = New-Object System.Drawing.Point(18, 296)
 $lblProt.AutoSize = $true
 
 $txtLog            = New-Object System.Windows.Forms.TextBox
-$txtLog.Location   = New-Object System.Drawing.Point(18, 296)
-$txtLog.Size       = New-Object System.Drawing.Size(584, 58)
+$txtLog.Location   = New-Object System.Drawing.Point(18, 316)
+$txtLog.Size       = New-Object System.Drawing.Size(584, 52)
 $txtLog.Multiline  = $true
 $txtLog.ReadOnly   = $true
 $txtLog.ScrollBars = 'Vertical'
@@ -640,26 +658,26 @@ $txtLog.Font       = New-Object System.Drawing.Font('Consolas', 9)
 
 $btnLink          = New-Object System.Windows.Forms.Button
 $btnLink.Text     = 'Verknüpfung auf dem Desktop'
-$btnLink.Location = New-Object System.Drawing.Point(18, 360)
+$btnLink.Location = New-Object System.Drawing.Point(18, 376)
 $btnLink.Size     = New-Object System.Drawing.Size(210, 26)
 
 $btnKennwort          = New-Object System.Windows.Forms.Button
 $btnKennwort.Text     = 'Kennwort ändern'
-$btnKennwort.Location = New-Object System.Drawing.Point(236, 360)
+$btnKennwort.Location = New-Object System.Drawing.Point(236, 376)
 $btnKennwort.Size     = New-Object System.Drawing.Size(150, 26)
 
 $btnServiceZu          = New-Object System.Windows.Forms.Button
 $btnServiceZu.Text     = 'Service schließen'
-$btnServiceZu.Location = New-Object System.Drawing.Point(452, 360)
+$btnServiceZu.Location = New-Object System.Drawing.Point(452, 376)
 $btnServiceZu.Size     = New-Object System.Drawing.Size(150, 26)
 
-$pnlService.Controls.AddRange(@($lblService, $grpGeraet, $grpAblage, $chkKachel, $lblProt, $txtLog,
-                                $btnLink, $btnKennwort, $btnServiceZu))
+$pnlService.Controls.AddRange(@($lblService, $grpGeraet, $grpAblage, $chkGerade, $chkLeer, $chkKachel,
+                                $lblProt, $txtLog, $btnLink, $btnKennwort, $btnServiceZu))
 $form.Controls.Add($pnlService)
 
 # --- Fusszeile --------------------------------------------------------------
 $lblFuss           = New-Object System.Windows.Forms.Label
-$lblFuss.Text      = "$($script:Firma)  -  $($script:Strasse)  -  $($script:Ort)"
+$lblFuss.Text      = "$($script:Copyright)  -  $($script:Strasse)  -  $($script:Ort)"
 $lblFuss.Location  = New-Object System.Drawing.Point(18, 304)
 $lblFuss.Size      = New-Object System.Drawing.Size(584, 18)
 $lblFuss.Anchor    = 'Bottom,Left'
@@ -724,7 +742,7 @@ $btnKachelScan.ForeColor = $firmenBlau
 $kachelInnen.Controls.AddRange(@($kachelName, $lblKachelStatus, $btnKachelScan))
 
 $hinweis = New-Object System.Windows.Forms.ToolTip
-$hinweisText = 'Scan: scannen  -  Doppelklick auf den Namen: Einstellungen  -  rechte Maustaste: Menü'
+$hinweisText = "Scan: scannen  -  Doppelklick auf den Namen: Einstellungen  -  rechte Maustaste: Menü`r`n$($script:Copyright)"
 $hinweis.SetToolTip($kachelInnen, $hinweisText)
 $hinweis.SetToolTip($kachelName, $hinweisText)
 
@@ -806,6 +824,8 @@ function Lies-Oberflaeche {
         Farbe   = $farbe
         Dpi     = $dpi
         Duplex  = $chkDuplex.Checked
+        Gerade     = $chkGerade.Checked
+        Leerseiten = $chkLeer.Checked
         Name    = $txtName.Text
         Oeffnen = $chkOeffnen.Checked
         Scanner = [string]$cmbGeraet.SelectedItem
@@ -911,11 +931,11 @@ function Zeige-Service([bool]$sichtbar) {
         $form.ClientSize = New-Object System.Drawing.Size(620, $script:HoeheService)
         # auf niedrigen Bildschirmen bekommt der Servicebereich eine Bildlaufleiste
         $platz = $script:HoeheService - $pnlService.Top - 28
-        if ($platz -lt 392) {
+        if ($platz -lt 410) {
             $pnlService.Height     = $platz
             $pnlService.AutoScroll = $true
         } else {
-            $pnlService.Height     = 392
+            $pnlService.Height     = 410
             $pnlService.AutoScroll = $false
         }
     } else {
@@ -1324,6 +1344,8 @@ $chkKachel.Add_CheckedChanged({
 $txtZiel.Text       = $e.Ziel
 $txtName.Text       = $e.Name
 $chkDuplex.Checked  = [bool]$e.Duplex
+$chkGerade.Checked  = [bool]$e.Gerade
+$chkLeer.Checked    = [bool]$e.Leerseiten
 $chkOeffnen.Checked = [bool]$e.Oeffnen
 $radPdf.Checked     = ($e.Format -eq 'pdf')
 $radBild.Checked    = ($e.Format -ne 'pdf')

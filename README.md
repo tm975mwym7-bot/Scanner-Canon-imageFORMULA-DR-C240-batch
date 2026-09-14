@@ -94,6 +94,7 @@ Fenster nach unten auf und zeigt:
 |---|---|
 | Gerät und Qualität | Scannerauswahl, *Suchen*, Farbmodus, Auflösung |
 | Ablage | **Zielordner**, Dateiname, Namensvorschau, „Ergebnis öffnen" |
+| Nachbearbeitung | schräge Seiten gerade richten, leere Seiten weglassen |
 | Anzeige | Kachel unten rechts ein- oder ausschalten |
 | Protokoll | vollständige Ausgabe des letzten Scans |
 | Schaltflächen | Verknüpfung auf dem Desktop, Kennwort ändern, Service schließen |
@@ -196,6 +197,10 @@ Scan.bat [Optionen]
 | `/farbe` `/grau` `/sw` | Farbe (Standard), Graustufen, Schwarzweiß |
 | `/dpi <Zahl>` | Auflösung, z. B. `150`, `200`, `300`, `400`, `600` |
 | `/duplex` | Vorder- und Rückseite scannen |
+| `/gerade` | schräg eingezogene Seiten automatisch gerade richten |
+| `/drehen <Grad>` | alle Seiten fest drehen: `0`, `90`, `180` oder `270` |
+| `/leerseiten` | leere Seiten (z. B. unbedruckte Rückseiten) weglassen |
+| `/leerwert <Zahl>` | Empfindlichkeit dafür in Promille (Standard: `1.5`) |
 | `/name <Text>` | Namensbestandteil der Zieldatei |
 | `/ordner <Pfad>` | abweichender Zielordner |
 | `/seiten <Zahl>` | höchstens so viele Blätter einziehen (`0` = alle) |
@@ -229,6 +234,50 @@ und das Ziel ergänzen:
 ```
 C:\Tools\Scan.bat /duplex /grau /dpi 200 /name Posteingang
 ```
+
+## Leere Seiten und schiefe Vorlagen
+
+Beides schaltet man im Servicebereich ein (Kommandozeile: `/leerseiten` und
+`/gerade`); im Auslieferungszustand ist beides **aus**, damit ohne
+ausdrückliche Entscheidung nichts verschwindet.
+
+**Leere Seiten weglassen** — vor allem für Duplex-Stapel gedacht, bei denen die
+Rückseiten unbedruckt sind. Geprüft wird auf einer verkleinerten Vorschau, wie
+viel Farbe auf der Seite liegt; ein Rand von 7 % bleibt außen vor, weil dort
+Lochung, Einzugsschatten und Knicke sitzen. Eine Seite gilt nur dann als leer,
+wenn **insgesamt** fast nichts da ist **und** kein einzelnes Raster­feld
+auffällt — sonst würde ein Handzeichen in der Ecke mit verschwinden. Sollten
+ausnahmsweise alle Seiten als leer gelten, wird nichts weggelassen.
+
+Gemessen an Testvorlagen (300 dpi):
+
+| Vorlage | gemessen | Ergebnis |
+|---|---|---|
+| unbedrucktes Blatt, mit Scannerrauschen | 0,00 ‰ | wird weggelassen |
+| leeres Blatt mit Aktenlochung und Einzugsschatten | 0,00 ‰ | wird weggelassen |
+| leere Rückseite, Vorderseite scheint durch | 0,00 ‰ | wird weggelassen |
+| Blatt mit nur „ok" handschriftlich | 0,06 ‰, Feld 0,5 % | bleibt |
+| Blatt mit kleinem Kürzel „i. A. Müller" | 0,39 ‰, Feld 2,9 % | bleibt |
+| Brief, Formular | 47–109 ‰ | bleibt |
+
+Wer es strenger oder lockerer möchte, verstellt `/leerwert` (höher = mehr wird
+als leer eingestuft).
+
+**Gerade richten** — der Schräglauf wird über die Textzeilen gemessen: Die
+Seite wird probeweise in Schritten von einem halben Grad geschert, und der
+Winkel, bei dem die Zeilen am saubersten übereinanderliegen, ist der gesuchte.
+Anschließend wird das Bild um genau diesen Winkel zurückgedreht (weißer
+Hintergrund, Bildgröße bleibt). Im Test wurden -4,2°, -1,5°, +0,8°, +2,7° und
++6,0° jeweils exakt erkannt; nach der Korrektur blieb ein Restwinkel von 0,0°.
+Erst ab 0,2° wird überhaupt gedreht — darunter lohnt sich das Neuberechnen der
+Bildpunkte nicht.
+
+> **Textausrichtung (Kopfstand, Querlage) erkennt das Programm nicht.**
+> Das ist kein Versehen, sondern gemessen: Für aufrecht und um 180° gedreht
+> liefern die Kennzahlen 0,518 gegenüber 0,523 — das trennt nichts.
+> Zuverlässig geht das nur mit Texterkennung (OCR). Wenn Vorlagen systematisch
+> falsch herum eingezogen werden, hilft `/drehen 90|180|270`; die
+> OCR-gestützte Ausrichtung bringt Canon CaptureOnTouch mit.
 
 ## Voraussetzungen
 
@@ -316,6 +365,12 @@ sich abbrechen. Die Scan-Logik gibt es also nur einmal.
   Pixel Kantenlänge.
 * Die Desktop-Verknüpfung entsteht über `WScript.Shell` mit Fensterstil
   „minimiert".
+* Leerseitenprüfung und Schräglaufmessung rechnen in einer kleinen, zur
+  Laufzeit übersetzten C#-Klasse (Rückfallweg in PowerShell, falls das
+  Übersetzen scheitert).
+* Jedes erzeugte PDF trägt die Dokumentangaben `/Producer`, `/Author` und
+  `/Subject` mit dem Copyright der IDO GmbH sowie Erstellungsdatum und
+  Zeitzone.
 
 * Der Scan läuft über **WIA** (`WIA.DeviceManager`); Einzug, Duplex, Farbmodus,
   Auflösung und Scanbereich werden über die WIA-Eigenschaften gesetzt. Nach
