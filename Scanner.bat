@@ -44,9 +44,10 @@ $script:Strasse    = 'Anderslebener Str. 40'
 $script:Ort        = '39387 Oschersleben'
 $script:Jahr       = '2026'
 
-# --- Servicekennwort (SHA-256). Standard: IDO-Service -----------------------
-# Aenderbar ueber "Kennwort aendern" im Servicebereich.
-$script:KennwortHash = 'c94d0144f7b6b395083a18da0e53b2483626fd01e98ed67c3cbb5b1cd6a3fdb3'
+# --- Servicekennwort (SHA-256) ---------------------------------------------
+# Leer = noch nicht eingerichtet; dann fragt das Programm beim ersten Start
+# nach einem Kennwort und traegt die Pruefsumme hier ein.
+$script:KennwortHash = ''
 
 $script:EigenerPfad = $env:GUI_SELF
 $script:Ordner      = Split-Path -Parent $script:EigenerPfad
@@ -55,6 +56,8 @@ $script:EinstOrdner = [IO.Path]::Combine($env:APPDATA, 'Scan-DR-C240')
 
 # Einstellungen liegen bevorzugt beim Programm (gilt dann fuer alle Benutzer
 # des Rechners); ist der Ordner schreibgeschuetzt, weichen wir ins Profil aus.
+$script:KennwortBeimProgramm = [IO.Path]::Combine($script:Ordner, 'service.dat')
+$script:KennwortImProfil     = [IO.Path]::Combine($script:EinstOrdner, 'service.dat')
 $script:EinstBeimProgramm = [IO.Path]::Combine($script:Ordner, 'einstellungen.json')
 $script:EinstImProfil     = [IO.Path]::Combine($script:EinstOrdner, 'einstellungen.json')
 $script:EinstDatei        = $script:EinstBeimProgramm
@@ -73,9 +76,44 @@ function Get-TextHash([string]$text) {
     return (-join ($bytes | ForEach-Object { $_.ToString('x2') }))
 }
 
+# Pruefsumme aus dem Skript oder - falls es schreibgeschuetzt war - aus service.dat
+function Get-KennwortHash {
+    if ($script:KennwortHash -match '^[0-9a-fA-F]{64}$') { return $script:KennwortHash }
+    foreach ($datei in @($script:KennwortBeimProgramm, $script:KennwortImProfil)) {
+        if (Test-Path -LiteralPath $datei) {
+            try {
+                $inhalt = (Get-Content -LiteralPath $datei -Raw).Trim()
+                if ($inhalt -match '^[0-9a-fA-F]{64}$') { return $inhalt }
+            } catch { }
+        }
+    }
+    return ''
+}
+
 function Test-Kennwort([string]$eingabe) {
     if (-not $eingabe) { return $false }
-    return ((Get-TextHash $eingabe) -eq $script:KennwortHash)
+    $hash = Get-KennwortHash
+    if (-not $hash) { return $false }
+    return ((Get-TextHash $eingabe) -eq $hash)
+}
+
+# neuen Hash ablegen: bevorzugt in dieser Datei, sonst in service.dat
+function Speichere-KennwortHash([string]$neuerHash) {
+    $script:KennwortHash = $neuerHash
+    try {
+        Set-KennwortHash $neuerHash
+        return 'Datei'
+    } catch {
+        foreach ($ziel in @($script:KennwortBeimProgramm, $script:KennwortImProfil)) {
+            try {
+                $ordner = Split-Path -Parent $ziel
+                if (-not (Test-Path -LiteralPath $ordner)) { New-Item -ItemType Directory -Path $ordner -Force | Out-Null }
+                Set-Content -LiteralPath $ziel -Value $neuerHash -Encoding ASCII
+                return 'Nebendatei'
+            } catch { continue }
+        }
+    }
+    return 'Nur Sitzung'
 }
 
 # neuen Hash in diese Datei zurueckschreiben (Zeilenenden bleiben erhalten)
@@ -638,7 +676,7 @@ $kachel.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
 $kachel.ShowInTaskbar   = $false
 $kachel.TopMost         = $true
 $kachel.StartPosition   = 'Manual'
-$kachel.Size            = New-Object System.Drawing.Size(180, 60)
+$kachel.Size            = New-Object System.Drawing.Size(222, 98)
 $kachel.BackColor       = $firmenBlau          # dient als 2 Pixel breiter Rahmen
 $kachel.Padding         = New-Object System.Windows.Forms.Padding(2)
 $kachel.Font            = $form.Font
@@ -649,50 +687,68 @@ $kachelInnen.Dock      = [System.Windows.Forms.DockStyle]::Fill
 $kachelInnen.BackColor = [System.Drawing.Color]::White
 $kachel.Controls.Add($kachelInnen)
 
+# Name der Firma - ein Doppelklick darauf oeffnet den Servicebereich
 $kachelBild = $null
 if ($logoDatei) {
     try { $kachelBild = Get-LogoBild $logoDatei } catch { $kachelBild = $null }
 }
 if ($kachelBild) {
-    $picKachel          = New-Object System.Windows.Forms.PictureBox
-    $picKachel.Location = New-Object System.Drawing.Point(8, 7)
-    $picKachel.Size     = New-Object System.Drawing.Size(74, 20)
-    $picKachel.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
-    $picKachel.Image    = $kachelBild
-    $kachelInnen.Controls.Add($picKachel)
-    $kachelTitelX = 90
+    $kachelName          = New-Object System.Windows.Forms.PictureBox
+    $kachelName.Location = New-Object System.Drawing.Point(10, 7)
+    $kachelName.Size     = New-Object System.Drawing.Size(150, 24)
+    $kachelName.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
+    $kachelName.Image    = $kachelBild
 } else {
-    $kachelTitelX = 10
+    $kachelName           = New-Object System.Windows.Forms.Label
+    $kachelName.Text      = $script:Firma
+    $kachelName.Location  = New-Object System.Drawing.Point(10, 6)
+    $kachelName.AutoSize  = $true
+    $kachelName.Font      = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+    $kachelName.ForeColor = $firmenBlau
 }
 
-$lblKachelTitel           = New-Object System.Windows.Forms.Label
-$lblKachelTitel.Text      = 'Scannen'
-$lblKachelTitel.Location  = New-Object System.Drawing.Point($kachelTitelX, 5)
-$lblKachelTitel.AutoSize  = $true
-$lblKachelTitel.Font      = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
-$lblKachelTitel.ForeColor = $firmenBlau
+$lblKachelStatus           = New-Object System.Windows.Forms.Label
+$lblKachelStatus.Text      = 'Bereit'
+$lblKachelStatus.Location  = New-Object System.Drawing.Point(10, 33)
+$lblKachelStatus.Size      = New-Object System.Drawing.Size(198, 28)
+$lblKachelStatus.ForeColor = [System.Drawing.Color]::DimGray
+$lblKachelStatus.Font      = New-Object System.Drawing.Font('Segoe UI', 8)
 
-$lblKachelStatus              = New-Object System.Windows.Forms.Label
-$lblKachelStatus.Text         = 'Bereit'
-$lblKachelStatus.Location     = New-Object System.Drawing.Point(9, 33)
-$lblKachelStatus.Size         = New-Object System.Drawing.Size(160, 18)
-$lblKachelStatus.AutoEllipsis = $true
-$lblKachelStatus.ForeColor    = [System.Drawing.Color]::DimGray
-$lblKachelStatus.Font         = New-Object System.Drawing.Font('Segoe UI', 8)
+$btnKachelScan           = New-Object System.Windows.Forms.Button
+$btnKachelScan.Text      = 'Scan'
+$btnKachelScan.Location  = New-Object System.Drawing.Point(10, 63)
+$btnKachelScan.Size      = New-Object System.Drawing.Size(198, 27)
+$btnKachelScan.Font      = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+$btnKachelScan.ForeColor = $firmenBlau
 
-$kachelInnen.Controls.AddRange(@($lblKachelTitel, $lblKachelStatus))
+$kachelInnen.Controls.AddRange(@($kachelName, $lblKachelStatus, $btnKachelScan))
 
 $hinweis = New-Object System.Windows.Forms.ToolTip
-$hinweisText = 'Klicken: Scan-Optionen  -  rechte Maustaste: Menü  -  ziehen: verschieben'
+$hinweisText = 'Scan: scannen  -  Doppelklick auf den Namen: Einstellungen  -  rechte Maustaste: Menü'
 $hinweis.SetToolTip($kachelInnen, $hinweisText)
-$hinweis.SetToolTip($lblKachelTitel, $hinweisText)
-$hinweis.SetToolTip($lblKachelStatus, $hinweisText)
+$hinweis.SetToolTip($kachelName, $hinweisText)
 
+# --- Menue der rechten Maustaste -------------------------------------------
 $menuKachel = New-Object System.Windows.Forms.ContextMenuStrip
-$miScannen  = $menuKachel.Items.Add('Sofort scannen')
-$miOptionen = $menuKachel.Items.Add('Optionen ...')
-[void]$menuKachel.Items.Add('-')
-$miBeenden  = $menuKachel.Items.Add('Beenden')
+
+$miScannen = New-Object System.Windows.Forms.ToolStripMenuItem('Scan starten')
+$miScannen.Font = New-Object System.Drawing.Font($menuKachel.Font, [System.Drawing.FontStyle]::Bold)
+[void]$menuKachel.Items.Add($miScannen)
+[void]$menuKachel.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+
+$miPdf    = New-Object System.Windows.Forms.ToolStripMenuItem('als PDF')
+$miBild   = New-Object System.Windows.Forms.ToolStripMenuItem('als Bilddateien')
+$miDuplex = New-Object System.Windows.Forms.ToolStripMenuItem('Vorder- und Rückseite')
+[void]$menuKachel.Items.Add($miPdf)
+[void]$menuKachel.Items.Add($miBild)
+[void]$menuKachel.Items.Add($miDuplex)
+[void]$menuKachel.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+
+$miOptionen = New-Object System.Windows.Forms.ToolStripMenuItem('Weitere Einstellungen ...')
+$miBeenden  = New-Object System.Windows.Forms.ToolStripMenuItem('Beenden')
+[void]$menuKachel.Items.Add($miOptionen)
+[void]$menuKachel.Items.Add($miBeenden)
+
 $kachel.ContextMenuStrip = $menuKachel
 
 # ---------------------------------------------------------------------------
@@ -715,8 +771,9 @@ $script:KachelStart = New-Object System.Drawing.Point(0, 0)
 function Setze-Status([string]$text) {
     $lblStatus.Text = $text
     $kurz = $text -replace '\s+', ' '
-    if ($kurz.Length -gt 60) { $kurz = $kurz.Substring(0, 57) + '...' }
+    if ($kurz.Length -gt 95) { $kurz = $kurz.Substring(0, 92) + '...' }
     $lblKachelStatus.Text = $kurz
+    try { $hinweis.SetToolTip($lblKachelStatus, $text) } catch { }
 }
 
 function Lies-Oberflaeche {
@@ -770,7 +827,8 @@ function Aktualisiere-Muster {
 }
 
 function Setze-Betrieb([bool]$laeuft) {
-    $btnScan.Enabled     = -not $laeuft
+    $btnScan.Enabled       = -not $laeuft
+    $btnKachelScan.Enabled = -not $laeuft
     $btnAbbruch.Enabled  = $laeuft
     $grpWas.Enabled      = -not $laeuft
     $pnlService.Enabled  = -not $laeuft
@@ -805,10 +863,11 @@ function Show-Kennwortfrage([string]$titel, [string]$beschriftung) {
     $d.Text            = $titel
     $d.ClientSize      = New-Object System.Drawing.Size(390, 132)
     $d.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
-    $d.StartPosition   = 'CenterParent'
+    $d.StartPosition   = 'CenterScreen'   # der Besitzer kann versteckt sein
     $d.MinimizeBox     = $false
     $d.MaximizeBox     = $false
     $d.ShowInTaskbar   = $false
+    $d.TopMost         = $true            # sonst liegt die Kachel davor
     $d.Font            = $form.Font
     if ($form.Icon) { $d.Icon = $form.Icon }
 
@@ -838,7 +897,8 @@ function Show-Kennwortfrage([string]$titel, [string]$beschriftung) {
     $d.AcceptButton = $ok
     $d.CancelButton = $ab
 
-    $antwort = $d.ShowDialog($form)
+    [void]$d.Activate()
+    $antwort = $d.ShowDialog()
     $eingabe = $t.Text
     $d.Dispose()
     if ($antwort -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
@@ -863,17 +923,49 @@ function Zeige-Service([bool]$sichtbar) {
     }
 }
 
+# Kennwort festlegen (Ersteinrichtung oder Wechsel). Gibt $true bei Erfolg.
+function Setze-NeuesKennwort([string]$titel, [string]$text) {
+    $neu = Show-Kennwortfrage $titel $text
+    if ($null -eq $neu) { return $false }
+    if ($neu.Length -lt 4) {
+        [void][System.Windows.Forms.MessageBox]::Show($null, 'Bitte mindestens vier Zeichen verwenden.', $titel, 'OK', 'Warning')
+        return $false
+    }
+    $wdh = Show-Kennwortfrage $titel 'Kennwort zur Sicherheit wiederholen:'
+    if ($null -eq $wdh) { return $false }
+    if ($neu -cne $wdh) {
+        [void][System.Windows.Forms.MessageBox]::Show($null, 'Die beiden Eingaben sind nicht gleich.', $titel, 'OK', 'Warning')
+        return $false
+    }
+    $wohin = Speichere-KennwortHash (Get-TextHash $neu)
+    if ($wohin -eq 'Nur Sitzung') {
+        [void][System.Windows.Forms.MessageBox]::Show($null,
+            ('Das Kennwort konnte nirgends gespeichert werden (alles schreibgeschützt).' + "`r`n" +
+             'Es gilt nur bis zum Beenden des Programms.'), $titel, 'OK', 'Warning')
+    }
+    return $true
+}
+
 function Oeffne-Service {
-    if ($pnlService.Visible) { return }
     if (-not $script:ServiceFrei) {
-        $eingabe = Show-Kennwortfrage 'Service' 'Servicekennwort eingeben:'
-        if ($null -eq $eingabe) { return }
-        if (-not (Test-Kennwort $eingabe)) {
-            [void][System.Windows.Forms.MessageBox]::Show($form, 'Das Kennwort ist falsch.', 'Service', 'OK', 'Warning')
-            return
+        if (-not (Get-KennwortHash)) {
+            # Erstes Mal: Kennwort festlegen, danach ist die Einrichtung frei
+            $frage = [System.Windows.Forms.MessageBox]::Show($null,
+                ('Für diesen Rechner ist noch kein Servicekennwort vergeben.' + "`r`n`r`n" +
+                 'Jetzt eines festlegen?'), 'Einrichtung', 'YesNo', 'Question')
+            if ($frage -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+            if (-not (Setze-NeuesKennwort 'Einrichtung' 'Neues Servicekennwort festlegen:')) { return }
+        } else {
+            $eingabe = Show-Kennwortfrage 'Service' 'Servicekennwort eingeben:'
+            if ($null -eq $eingabe) { return }
+            if (-not (Test-Kennwort $eingabe)) {
+                [void][System.Windows.Forms.MessageBox]::Show($null, 'Das Kennwort ist falsch.', 'Service', 'OK', 'Warning')
+                return
+            }
         }
         $script:ServiceFrei = $true
     }
+    Zeige-Hauptfenster        # das Fenster kann versteckt sein
     Zeige-Service $true
 }
 
@@ -959,29 +1051,8 @@ $btnLink.Add_Click({
 })
 
 $btnKennwort.Add_Click({
-    $neu = Show-Kennwortfrage 'Kennwort ändern' 'Neues Servicekennwort:'
-    if ($null -eq $neu) { return }
-    if ($neu.Length -lt 4) {
-        [void][System.Windows.Forms.MessageBox]::Show($form, 'Bitte mindestens vier Zeichen verwenden.', 'Kennwort ändern', 'OK', 'Warning')
-        return
-    }
-    $wdh = Show-Kennwortfrage 'Kennwort ändern' 'Neues Kennwort wiederholen:'
-    if ($null -eq $wdh) { return }
-    if ($neu -cne $wdh) {
-        [void][System.Windows.Forms.MessageBox]::Show($form, 'Die beiden Eingaben sind nicht gleich.', 'Kennwort ändern', 'OK', 'Warning')
-        return
-    }
-    $hash = Get-TextHash $neu
-    try {
-        Set-KennwortHash $hash
+    if (Setze-NeuesKennwort 'Kennwort ändern' 'Neues Servicekennwort:') {
         [void][System.Windows.Forms.MessageBox]::Show($form, 'Das Servicekennwort wurde geändert.', 'Kennwort ändern', 'OK', 'Information')
-    } catch {
-        $script:KennwortHash = $hash   # gilt zumindest für diese Sitzung
-        [void][System.Windows.Forms.MessageBox]::Show($form,
-            ("Die Datei konnte nicht geändert werden (schreibgeschützt?)." + "`r`n`r`n" +
-             "Tragen Sie in Scanner.bat von Hand ein:" + "`r`n" +
-             "`$script:KennwortHash = '$hash'"),
-            'Kennwort ändern', 'OK', 'Warning')
     }
 })
 
@@ -1153,7 +1224,8 @@ function Beende-Programm {
     [System.Windows.Forms.Application]::Exit()
 }
 
-# --- Kachel: Klick oeffnet die Optionen, Ziehen verschiebt sie --------------
+# --- Kachel: Ziehen verschiebt sie, Doppelklick auf den Namen oeffnet den
+#     Servicebereich, der Knopf Scan startet den Scan.
 $kachelRunter = {
     param($absender, $ereignis)
     if ($ereignis.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
@@ -1174,27 +1246,32 @@ $kachelBewegt = {
 }
 $kachelHoch = {
     param($absender, $ereignis)
-    if ($ereignis.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
     $script:ZiehtGerade = $false
-    if (-not $script:Gezogen) { Zeige-Hauptfenster }
 }
 
-foreach ($teil in @($kachel, $kachelInnen, $lblKachelTitel, $lblKachelStatus)) {
+foreach ($teil in @($kachel, $kachelInnen, $kachelName, $lblKachelStatus)) {
     $teil.Add_MouseDown($kachelRunter)
     $teil.Add_MouseMove($kachelBewegt)
     $teil.Add_MouseUp($kachelHoch)
     $teil.ContextMenuStrip = $menuKachel
-    $teil.Cursor = [System.Windows.Forms.Cursors]::Hand
 }
-if ($kachelBild) {
-    $picKachel.Add_MouseDown($kachelRunter)
-    $picKachel.Add_MouseMove($kachelBewegt)
-    $picKachel.Add_MouseUp($kachelHoch)
-    $picKachel.ContextMenuStrip = $menuKachel
-    $picKachel.Cursor = [System.Windows.Forms.Cursors]::Hand
-}
+$kachelName.Cursor = [System.Windows.Forms.Cursors]::Hand
+$kachelName.Add_DoubleClick({ Oeffne-Service })
+
+$btnKachelScan.Add_Click({ Starte-Scan })
+
+# Haken im Menue vor dem Aufklappen an die aktuellen Einstellungen anpassen
+$menuKachel.Add_Opening({
+    $miPdf.Checked    = $radPdf.Checked
+    $miBild.Checked   = $radBild.Checked
+    $miDuplex.Checked = $chkDuplex.Checked
+    $miScannen.Enabled = ($null -eq $script:Prozess)
+})
 
 $miScannen.Add_Click({ Starte-Scan })
+$miPdf.Add_Click({ $radPdf.Checked = $true })
+$miBild.Add_Click({ $radBild.Checked = $true })
+$miDuplex.Add_Click({ $chkDuplex.Checked = -not $chkDuplex.Checked })
 $miOptionen.Add_Click({ Zeige-Hauptfenster })
 $miBeenden.Add_Click({ Beende-Programm })
 
@@ -1278,6 +1355,21 @@ if ($script:KachelAktiv) {
     $kachel.Show()
 } else {
     $form.Show()
+}
+
+# Erster Start auf diesem Rechner: zuerst das Servicekennwort festlegen,
+# danach steht die Einrichtung sofort offen.
+if (-not (Get-KennwortHash)) {
+    [void][System.Windows.Forms.MessageBox]::Show($null,
+        ('Einrichtung durch die ' + $script:Firma + "`r`n`r`n" +
+         'Legen Sie zuerst ein Servicekennwort fest. Es schützt Zielordner und ' +
+         'Geräteeinstellungen vor versehentlichen Änderungen.'),
+        'Einrichtung', 'OK', 'Information')
+    if (Setze-NeuesKennwort 'Einrichtung' 'Neues Servicekennwort festlegen:') {
+        $script:ServiceFrei = $true
+        Zeige-Hauptfenster
+        Zeige-Service $true
+    }
 }
 
 [System.Windows.Forms.Application]::Run()

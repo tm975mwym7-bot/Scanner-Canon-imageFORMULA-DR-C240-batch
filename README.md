@@ -19,34 +19,41 @@ standardmäßig als mehrseitige PDF-Datei unter **Eigene Dokumente\Scans**.
 
 # 1. Das Fenster: `Scanner.bat`
 
-## Die Kachel unten rechts
+## Die Kachel unten rechts — das Bedienelement für den Alltag
 
 Beim Start legt sich eine kleine Kachel in die **rechte untere Bildschirmecke**,
 über der Taskleiste. Sie liegt **immer im Vordergrund** und bleibt liegen,
 während nebenher gearbeitet wird:
 
 ```
-                          ┌──────────────────────┐
-                          │ [IDO-Logo]  Scannen  │
-                          │ Seite 3 wird ...     │
-                          └──────────────────────┘
+                       ┌─────────────────────────┐
+                       │ IDO GmbH                │   <- Doppelklick: Service
+                       │ Fertig - 3 Seite(n)     │
+                       │ gescannt und gespeichert│
+                       │ ┌─────────────────────┐ │
+                       │ │        Scan         │ │   <- ein Klick genügt
+                       │ └─────────────────────┘ │
+                       └─────────────────────────┘
 ```
+
+Oben steht der Firmenname — liegt eine `logo.png` daneben, erscheint dort
+stattdessen das Logo. Darunter läuft der Stand des Scans mit, und die
+Schaltfläche **Scan** startet ihn. Mehr braucht die Kundin nicht: Blätter
+einlegen, auf *Scan* klicken, fertig.
 
 | Aktion | Wirkung |
 |---|---|
-| **Klick** | öffnet das Fenster mit den Optionen |
-| **Rechtsklick** | Menü: *Sofort scannen*, *Optionen …*, *Beenden* |
+| **Scan** | startet den Scan sofort |
+| **Doppelklick auf den Namen/das Logo** | öffnet nach Kennworteingabe den Servicebereich |
+| **Rechtsklick** | Menü: *Scan starten*, *als PDF* / *als Bilddateien*, *Vorder- und Rückseite*, *Weitere Einstellungen …*, *Beenden* |
 | **Ziehen** | Kachel verschieben — die Position wird gemerkt |
 
-Die untere Zeile der Kachel zeigt mit, was gerade passiert („Seite 3 wird
-gescannt …", „Fertig – 3 Seite(n) gescannt und gespeichert."). Für den
-schnellsten Weg genügt also: Blätter einlegen, Rechtsklick, *Sofort scannen* —
-ganz ohne Fenster.
+Format und Duplex lassen sich also direkt im Rechtsklickmenü umstellen, ohne
+je ein Fenster zu öffnen. Das große Fenster wird nur noch für die Einrichtung
+und für Sonderfälle gebraucht; wer es gar nicht möchte, schaltet im
+Servicebereich die Kachel ab und arbeitet nur mit dem Fenster.
 
-Das Fenster lässt sich jederzeit über das **X** schließen; das Programm läuft
-mit der Kachel weiter. Beendet wird über *Beenden* im Kachelmenü. Wer die
-Kachel nicht möchte, schaltet sie im Servicebereich ab — dann verhält sich das
-Programm wie ein normales Fenster.
+Beendet wird über *Beenden* im Kachelmenü.
 
 ## Das Fenster (Kundenansicht)
 
@@ -94,11 +101,17 @@ Fenster nach unten auf und zeigt:
 Wird das Fenster geschlossen, ist der Servicebereich wieder gesperrt — beim
 nächsten Öffnen fragt das Programm erneut nach dem Kennwort.
 
-Auslieferungszustand des Kennworts: **`IDO-Service`** — bei der Einrichtung
-über *Kennwort ändern* auf ein eigenes umstellen. Das Kennwort steht nicht im
-Klartext in der Datei, sondern als SHA-256-Prüfsumme; *Kennwort ändern*
-schreibt die neue Prüfsumme direkt in `Scanner.bat` zurück. Ist die Datei
-schreibgeschützt, zeigt das Programm die Zeile zum manuellen Eintragen an.
+**Beim ersten Start auf einem Rechner** meldet sich das Programm sofort:
+*„Legen Sie zuerst ein Servicekennwort fest."* — Kennwort zweimal eingeben,
+danach öffnet sich der Servicebereich direkt zum Einrichten. Ausgeliefert wird
+also **ohne** vorgegebenes Kennwort; ohne festgelegtes Kennwort kommt auch
+niemand in den Servicebereich.
+
+Gespeichert wird nur die SHA-256-Prüfsumme, und zwar in `Scanner.bat` selbst
+(Zeile `$script:KennwortHash`). Ist die Datei schreibgeschützt, landet sie
+stattdessen in einer kleinen Datei `service.dat` neben dem Programm oder im
+Benutzerprofil. Später ändern lässt sie sich jederzeit über *Kennwort ändern*
+im Servicebereich.
 
 > **Einordnung:** Das ist ein Bedienschutz, kein Zugriffsschutz. Eine
 > Batchdatei ist lesbarer Text — wer sich auskennt, kann die Prüfsumme
@@ -245,9 +258,11 @@ trotzdem, `Scan.bat` in einer Eingabeaufforderung starten — dann bleiben alle
 Meldungen sichtbar.
 
 **Servicekennwort vergessen**
-In `Scanner.bat` die Zeile mit `$script:KennwortHash` suchen und den Wert
-durch die Prüfsumme des Auslieferungskennworts `IDO-Service` ersetzen:
-`c94d0144f7b6b395083a18da0e53b2483626fd01e98ed67c3cbb5b1cd6a3fdb3`
+In `Scanner.bat` die Zeile `$script:KennwortHash = '...'` auf zwei
+Anführungszeichen leeren (`$script:KennwortHash = ''`) und eine eventuell
+vorhandene `service.dat` löschen — neben dem Programm und unter
+`%APPDATA%\Scan-DR-C240\`. Beim nächsten Start fragt das Programm wieder
+nach einem neuen Kennwort.
 
 **Die Kundin soll den Zielordner gar nicht ändern können**
 Zusätzlich zum Kennwort die NTFS-Rechte auf den Programmordner so setzen, dass
@@ -293,7 +308,9 @@ deshalb friert das Fenster während des Scannens nicht ein und der Vorgang läss
 sich abbrechen. Die Scan-Logik gibt es also nur einmal.
 
 * Das Servicekennwort wird als SHA-256-Prüfsumme geprüft und nur als solche
-  gespeichert.
+  gespeichert — in der Programmdatei, ersatzweise in `service.dat`.
+* Kachel und Fenster laufen in einer gemeinsamen Nachrichtenschleife
+  (`Application.Run`); Statusmeldungen gehen über eine Funktion an beide.
 * Die `logo.ico` wird zur Laufzeit aus dem Logo gebaut: je Größe ein
   PNG-Block, zusammengesetzt zu einer ICO-Datei mit 16/24/32/48/64/128/256
   Pixel Kantenlänge.
