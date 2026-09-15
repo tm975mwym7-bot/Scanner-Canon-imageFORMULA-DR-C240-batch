@@ -1189,11 +1189,27 @@ function KannFormat($liste, $guid) {
 
 # Fuer PDF/JPG ist JPEG am sparsamsten, fuer PNG/TIFF und Schwarzweiss
 # wird verlustfrei uebertragen, damit nicht zweimal komprimiert wird.
+if ($verfuegbareFormate.Count -gt 0) {
+    $formatNamen = @()
+    foreach ($f in $verfuegbareFormate) {
+        switch ($f.ToUpperInvariant()) {
+            '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'JPEG' }
+            '{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'PNG' }
+            '{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'BMP' }
+            '{B96B3CB1-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'TIFF' }
+            default { $formatNamen += $f }
+        }
+    }
+    Info ("Der Treiber meldet diese Bildformate: " + ($formatNamen -join ', '))
+}
+
 $transferFormat = $FMT_BMP
 $transferEndung = '.bmp'
-if (($duplex -or $dialog) -and (KannFormat $verfuegbareFormate $FMT_TIFF)) {
-    # Beidseitig kommen Vorder- und Rueckseite oft zusammen in einer Datei -
-    # das kann nur ein mehrseitenfaehiges Format wie TIFF aufnehmen.
+if ($duplex -or $dialog) {
+    # Beidseitig kommen Vorder- und Rueckseite in EINER Uebertragung - das
+    # kann nur ein mehrseitenfaehiges Format wie TIFF aufnehmen. Angefordert
+    # wird es auch dann, wenn der Treiber es nicht in seiner Liste fuehrt:
+    # die Liste der WIA-Automation ist bei manchen Treibern unvollstaendig.
     $transferFormat = $FMT_TIFF
     $transferEndung = '.tif'
 } elseif (($format -eq 'pdf' -or $format -eq 'jpg') -and $farbmodus -ne 'sw' -and (KannFormat $verfuegbareFormate $FMT_JPEG)) {
@@ -1231,6 +1247,7 @@ $zeitstempel = Get-Date -Format 'yyyy-MM-dd_HHmmss'
 $arbeitsOrdner = [IO.Path]::Combine([IO.Path]::GetTempPath(), "Scan_" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $arbeitsOrdner -Force | Out-Null
 
+$probierteFormate = @($transferFormat)
 $rohSeiten = @()
 $seitenNr  = 0
 $abbruch   = $null
@@ -1240,7 +1257,8 @@ try {
     while ($true) {
         if ($maxSeiten -gt 0 -and $seitenNr -ge $maxSeiten) { break }
         $seitenNr++
-        $wortBlatt = if ($duplex -or $dialog) { 'Blatt' } else { 'Seite' }
+        $wortBlatt = 'Seite'
+        if ($duplex -or $dialog) { $wortBlatt = 'Blatt' }
         Write-Host ("  {0} {1} wird gescannt ..." -f $wortBlatt, $seitenNr) -NoNewline
 
         $bild = $null
@@ -1288,6 +1306,32 @@ try {
                     }
                     $rettung++
 
+                    # 0x8000FFFF heisst: Der Treiber bringt seine Bilder im
+                    # angeforderten Format nicht unter. Dann hilft ein anderes
+                    # Bildformat, nicht eine andere Einzugsart. Jedes Format
+                    # wird hoechstens einmal versucht.
+                    $istFormatfehler = ($hrErst -eq -2147418113 -or $hrErst -eq -2147024809)
+                    if ($istFormatfehler) {
+                        $naechstes = $null
+                        $naechsteEndung = ''
+                        $naechsterText = ''
+                        if ($probierteFormate -notcontains $FMT_TIFF) {
+                            $naechstes = $FMT_TIFF; $naechsteEndung = '.tif'
+                            $naechsterText = 'mehrseitenfaehigem TIFF'
+                        } elseif ($probierteFormate -notcontains $FMT_BMP) {
+                            $naechstes = $FMT_BMP; $naechsteEndung = '.bmp'
+                            $naechsterText = 'BMP'
+                        }
+                        if ($naechstes) {
+                            Info ("  Es wird mit {0} versucht ..." -f $naechsterText)
+                            $transferFormat = $naechstes
+                            $transferEndung = $naechsteEndung
+                            $probierteFormate += $naechstes
+                            Write-Host ("  {0} {1} wird gescannt ..." -f $wortBlatt, $seitenNr) -NoNewline
+                            continue
+                        }
+                    }
+
                     if (($wegNummer + 1) -lt $einzugsWege.Count) {
                         $wegNummer++
                         $weg = $einzugsWege[$wegNummer]
@@ -1310,17 +1354,6 @@ try {
                         continue
                     }
 
-                    if ($transferFormat -ne $FMT_TIFF -and (KannFormat $verfuegbareFormate $FMT_TIFF)) {
-                        Info "  Es wird mit mehrseitenfaehigem TIFF versucht ..."
-                        $transferFormat = $FMT_TIFF
-                        $transferEndung = '.tif'
-                        continue
-                    }
-                    if ($transferFormat -ne $FMT_BMP) {
-                        $transferFormat = $FMT_BMP
-                        $transferEndung = '.bmp'
-                        continue
-                    }
                     throw
                 }
             }
