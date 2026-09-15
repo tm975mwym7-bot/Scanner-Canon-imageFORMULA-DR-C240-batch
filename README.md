@@ -198,6 +198,7 @@ Scan.bat [Optionen]
 | `/farbe` `/grau` `/sw` | Farbe (Standard), Graustufen, Schwarzweiß |
 | `/dpi <Zahl>` | Auflösung, z. B. `150`, `200`, `300`, `400`, `600` |
 | `/duplex` | Vorder- und Rückseite scannen |
+| `/dialog` | vor dem Scan die Einstellungen des Scanner-Treibers zeigen |
 | `/einfach` | ohne eigene Geräteeinstellungen scannen (bei Treiberfehlern) |
 | `/duplexwert <n>` | Duplex-Schreibweise fest vorgeben (`1`, `4` oder `5`) |
 | `/gerade` | schräg eingezogene Seiten automatisch gerade richten |
@@ -328,6 +329,7 @@ Scan.bat /einfach
 scannt dann ohne eigene Vorgaben mit dem, was im Treiber eingestellt ist.
 
 **Fehler nur bei „Vorder- und Rückseite", einseitig geht es**
+
 Dann nimmt der WIA-Treiber die Duplex-Einstellung nicht an — kein Defekt,
 sondern eine Eigenheit vieler Treiber.
 
@@ -360,6 +362,32 @@ Fehlversuche:
 ```
 Scan.bat /duplex /duplexwert 13
 ```
+
+### Wenn der Treiber gar keine Duplex-Vorgabe annimmt
+
+Manche WIA-Treiber — die von Canon gehören dazu — nehmen die Einstellung
+schlicht nicht von außen entgegen. Typisches Bild: Der Scanner **zieht das
+Blatt ein**, gibt das Bild aber nicht heraus, und es kommt `0x80004005`
+(„Schwerwiegender Fehler"). Bei Brother- und HP-Geräten funktioniert derselbe
+Weg dagegen anstandslos.
+
+Dann muss die Einstellung **im Treiber selbst** stehen, und das Programm darf
+sie nicht überschreiben:
+
+```
+Scan.bat /dialog
+```
+
+öffnet den Einstellungsdialog des Scanner-Treibers. Dort *Scanseite* bzw.
+*Scanning Side* auf **Duplex** stellen, mit OK bestätigen — anschließend scannt
+das Programm mit genau diesen Einstellungen, ohne eigene Vorgaben. Im Fenster
+führt der Knopf **Treiber …** neben der Scannerauswahl (Servicebereich) zum
+selben Dialog; viele Treiber merken sich die Wahl dauerhaft, dann genügt das
+einmalig bei der Einrichtung.
+
+Damit das Programm die Treibervorgabe nicht wieder überschreibt: Haken bei
+*Vorder- und Rückseite* weglassen (oder `/einfach` verwenden) — die
+Seitenzahl im PDF zeigt dann, ob der Treiber beidseitig liefert.
 
 Nimmt der Treiber gar keine an, bleibt beidseitiges Scannen über die
 Canon-Treibereinstellung oder CaptureOnTouch möglich — über WIA geht es bei

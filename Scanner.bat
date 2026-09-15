@@ -595,13 +595,18 @@ $lblGeraet.AutoSize = $true
 
 $cmbGeraet          = New-Object System.Windows.Forms.ComboBox
 $cmbGeraet.Location = New-Object System.Drawing.Point(90, 22)
-$cmbGeraet.Size     = New-Object System.Drawing.Size(352, 24)
+$cmbGeraet.Size     = New-Object System.Drawing.Size(250, 24)
 $cmbGeraet.DropDownStyle = 'DropDownList'
 
 $btnAktual          = New-Object System.Windows.Forms.Button
 $btnAktual.Text     = 'Suchen'
-$btnAktual.Location = New-Object System.Drawing.Point(450, 21)
-$btnAktual.Size     = New-Object System.Drawing.Size(118, 26)
+$btnAktual.Location = New-Object System.Drawing.Point(348, 21)
+$btnAktual.Size     = New-Object System.Drawing.Size(100, 26)
+
+$btnTreiber          = New-Object System.Windows.Forms.Button
+$btnTreiber.Text     = 'Treiber ...'
+$btnTreiber.Location = New-Object System.Drawing.Point(454, 21)
+$btnTreiber.Size     = New-Object System.Drawing.Size(114, 26)
 
 $lblFarbe          = New-Object System.Windows.Forms.Label
 $lblFarbe.Text     = 'Farbe:'
@@ -630,7 +635,7 @@ $lblDpiEinheit.Text     = 'dpi'
 $lblDpiEinheit.Location = New-Object System.Drawing.Point(367, 60)
 $lblDpiEinheit.AutoSize = $true
 
-$grpGeraet.Controls.AddRange(@($lblGeraet, $cmbGeraet, $btnAktual, $lblFarbe, $cmbFarbe,
+$grpGeraet.Controls.AddRange(@($lblGeraet, $cmbGeraet, $btnAktual, $btnTreiber, $lblFarbe, $cmbFarbe,
                                $lblDpi, $cmbDpi, $lblDpiEinheit))
 
 # --- Ablage -----------------------------------------------------------------
@@ -1120,6 +1125,46 @@ $btnLink.Add_Click({
     } catch {
         [void][System.Windows.Forms.MessageBox]::Show($form,
             "Die Verknüpfung konnte nicht angelegt werden:`r`n$($_.Exception.Message)", 'Scannen', 'OK', 'Warning')
+    }
+})
+
+$btnTreiber.Add_Click({
+    $name = [string]$cmbGeraet.SelectedItem
+    if (-not $name -or $name -like '(*') {
+        [void][System.Windows.Forms.MessageBox]::Show($form, 'Es ist kein Scanner ausgewählt.', 'Treiber', 'OK', 'Warning')
+        return
+    }
+    try {
+        $manager = New-Object -ComObject WIA.DeviceManager
+        $anzahl = [int]$manager.DeviceInfos.Count
+        $gefunden = $null
+        for ($n = 1; $n -le $anzahl; $n++) {
+            $info = $manager.DeviceInfos.Item($n)
+            if ($info.Type -ne 1) { continue }
+            $gname = ''
+            try { $gname = [string]$info.Properties.Item('Name').Value } catch { }
+            if ($gname -eq $name) { $gefunden = $info; break }
+        }
+        if ($null -eq $gefunden) {
+            [void][System.Windows.Forms.MessageBox]::Show($form, "Der Scanner '$name' wurde nicht gefunden.", 'Treiber', 'OK', 'Warning')
+            return
+        }
+        $geraet = $gefunden.Connect()
+        $wiaDialog = New-Object -ComObject WIA.CommonDialog
+        [void][System.Windows.Forms.MessageBox]::Show($form,
+            ("Gleich öffnen sich die Einstellungen des Scanner-Treibers." + "`r`n`r`n" +
+             "Dort lässt sich unter anderem das beidseitige Scannen fest einstellen " +
+             "(beim Canon: Scanseite / Scanning Side = Duplex)." + "`r`n`r`n" +
+             "Bei vielen Treibern bleibt diese Einstellung dauerhaft erhalten - dann " +
+             "scannt das Programm auch ohne eigene Duplex-Vorgabe beidseitig."),
+            'Treiber-Einstellungen', 'OK', 'Information')
+        $ok = $wiaDialog.ShowAcquisitionSettings($geraet)
+        if ($ok) { Setze-Status 'Die Treibereinstellungen wurden übernommen.' }
+        else     { Setze-Status 'Der Treiberdialog wurde abgebrochen.' }
+    } catch {
+        [void][System.Windows.Forms.MessageBox]::Show($form,
+            ("Der Treiber bietet keinen eigenen Einstellungsdialog an." + "`r`n`r`n" + $_.Exception.Message.Trim()),
+            'Treiber-Einstellungen', 'OK', 'Warning')
     }
 })
 

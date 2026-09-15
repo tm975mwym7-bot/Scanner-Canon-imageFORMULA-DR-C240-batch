@@ -124,6 +124,8 @@ FARBE
 WEITERE OPTIONEN
   /dpi <Zahl>       Aufloesung, z.B. 150, 200, 300, 400, 600 (Standard: 300)
   /duplex           Vorder- und Rueckseite scannen
+  /dialog           vor dem Scan die Einstellungen des Canon-Treibers zeigen
+                    (dort laesst sich Duplex fest einstellen)
   /einfach          ohne eigene Geraeteeinstellungen scannen (bei Treiberfehlern)
   /duplexwert <n>   Duplex-Schreibweise fest vorgeben (1, 4 oder 5)
   /gerade           schraeg eingezogene Seiten automatisch gerade richten
@@ -205,6 +207,26 @@ function Get-WiaMax($sammlung, $id) {
     $p = Get-WiaProp $sammlung $id
     if ($null -eq $p) { return $null }
     try { return $p.SubTypeMax } catch { return $null }
+}
+
+# Klartext zu bekannten Fehlernummern
+function Get-WiaFehlerText([int]$hr) {
+    switch ($hr) {
+        -2145320959 { return '  (allgemeiner Geraetefehler)' }
+        -2145320958 { return '  (Papierstau)' }
+        -2145320957 { return '  (kein Papier im Einzug)' }
+        -2145320956 { return '  (Papier konnte nicht eingezogen werden)' }
+        -2145320955 { return '  (Geraet ist beschaeftigt)' }
+        -2145320954 { return '  (Geraet wird von einem anderen Programm benutzt)' }
+        -2145320953 { return '  (Abdeckung offen)' }
+        -2145320952 { return '  (Lampe aus)' }
+        -2145320947 { return '  (der Treiber lehnt diese Einstellung ab)' }
+        -2145320939 { return '  (Geraet offline)' }
+        -2147467259 { return '  (schwerwiegender Fehler - der Treiber kommt mit der Anfrage nicht zurecht)' }
+        -2147024809 { return '  (ungueltiger Wert)' }
+        -2147024882 { return '  (zu wenig Speicher fuer das Bild)' }
+        default     { return '' }
+    }
 }
 
 # HResult aus einer (ggf. verschachtelten) Ausnahme herausziehen
@@ -689,6 +711,7 @@ $zielOrdner = $null
 $basisName  = 'Scan'
 $maxSeiten  = 0
 $qualitaet  = 80
+$dialog     = $false
 $einfach    = $false
 $duplexWert = 0            # 0 = automatisch probieren
 $geradeRichten = $false
@@ -731,6 +754,7 @@ try {
             'graustufen'{ $farbmodus = 'grau' }
             'sw'        { $farbmodus = 'sw' }
             'duplex'    { $duplex = $true }
+            'dialog'    { $dialog = $true; $einfach = $true }
             'einfach'   { $einfach = $true }
             'duplexwert' { $duplexWert = AlsZahl (Naechstes ([ref]$i) 'duplexwert') 'duplexwert' }
             'gerade'    { $geradeRichten = $true }
@@ -908,6 +932,25 @@ function Get-HandlingWerte {
     return ($liste | Select-Object -Unique)
 }
 
+# Auf Wunsch die Einstellungen des Treibers zeigen. Was dort eingestellt
+# wird - auch Duplex - gilt fuer den folgenden Scan.
+if ($dialog) {
+    try {
+        $wiaDialog = New-Object -ComObject WIA.CommonDialog
+        Info "Die Einstellungen des Scanner-Treibers werden geoeffnet ..."
+        Info "Dort 'Vorder- und Rueckseite' bzw. 'Duplex' waehlen und mit OK bestaetigen."
+        $antwort = $wiaDialog.ShowAcquisitionSettings($geraet)
+        if ($antwort) {
+            Info "Die Einstellungen des Treibers werden uebernommen."
+        } else {
+            Warn "Der Dialog wurde abgebrochen - es gelten die bisherigen Einstellungen."
+        }
+        try { $element = $geraet.Items.Item(1) } catch { }
+    } catch {
+        Warn "Der Treiber bietet keinen eigenen Einstellungsdialog an ($($_.Exception.Message.Trim()))."
+    }
+}
+
 # Nicht jeder Treiber versteht dieselbe Schreibweise fuer Duplex. Deshalb
 # stehen mehrere bereit; scheitert der Scan, wird der Reihe nach umgestellt
 # und zuletzt einseitig gescannt, statt ganz aufzugeben.
@@ -1031,6 +1074,13 @@ if (-not $dpiGesetzt) {
 
 }   # Ende des Zweigs ohne /einfach
 
+# Manche Treiber legen fuer Duplex eigene Elemente an (Vorder-/Rueckseite).
+$anzahlElemente = 1
+try { $anzahlElemente = [int]$geraet.Items.Count } catch { $anzahlElemente = 1 }
+if ($anzahlElemente -gt 1) {
+    Info "Der Treiber bietet $anzahlElemente Scan-Elemente an - es werden alle nacheinander abgeholt."
+}
+
 $modusText = switch ($farbmodus) { 'farbe' { 'Farbe' } 'grau' { 'Graustufen' } 'sw' { 'Schwarzweiss' } }
 if ($einfach) { $modusText = 'Geraetevorgabe' }
 $seitenText = if ($duplex) { 'Duplex' } else { 'Einseitig' }
@@ -1113,11 +1163,29 @@ try {
                     break
                 } catch {
                     $hrErst = Get-HResult $_.Exception
+                    $textErst = $_.Exception.Message.Trim()
                     $istPapierfehler = ($hrErst -eq $ERR_PAPER_EMPTY -or $hrErst -eq $ERR_PAPER_JAM -or $hrErst -eq $ERR_OFFLINE)
                     # Beim ersten Anlauf heisst "kein Papier" wirklich kein Papier.
                     # Danach kann es auch an der geaenderten Einzugsart liegen.
                     if ($seitenNr -ne 1 -or $rettung -ge 5) { throw }
                     if ($istPapierfehler -and $rettung -eq 0) { throw }
+
+                    # Den echten Fehler zeigen - sonst raet man im Dunkeln.
+                    Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
+                    Warn ("Die Uebertragung schlug fehl: {0}" -f $textErst)
+                    if ($hrErst -ne 0) { Info ("  Fehlernummer: 0x{0:X8}{1}" -f $hrErst, (Get-WiaFehlerText $hrErst)) }
+
+                    # Liegt ueberhaupt noch Papier im Fach? Jeder weitere Versuch
+                    # wuerde sonst nur ein weiteres Blatt durchziehen.
+                    if ($hatEinzug) {
+                        $papier = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_STATUS
+                        if ($null -ne $papier -and ($papier -band 1) -eq 0) {
+                            Warn "Der Scanner hat das Blatt bereits eingezogen - es liegt keines mehr im Fach."
+                            Info "Deshalb wird nicht weiter probiert. Bitte das Blatt neu einlegen."
+                            Info "Welche Einstellung das Geraet annimmt, zeigt:  Diagnose.bat /duplextest"
+                            throw
+                        }
+                    }
                     $rettung++
 
                     if (($wegNummer + 1) -lt $einzugsWege.Count) {
@@ -1127,8 +1195,8 @@ try {
                         if ($weg.Duplex) {
                             Warn "Diese Duplex-Einstellung lehnt der Treiber ab - es wird '$($weg.Text)' versucht."
                         } elseif ($duplex) {
-                            Warn "Der Treiber beherrscht Duplex ueber WIA nicht - es wird einseitig gescannt."
-                            Info "Beidseitig geht dann ueber die Einstellung im Canon-Treiber oder CaptureOnTouch."
+                            Warn "Der Treiber nimmt keine Duplex-Vorgabe an - es wird einseitig gescannt."
+                            Info "Beidseitig geht ueber die Einstellung im Treiber selbst:  Scan.bat /dialog"
                             $duplex = $false
                         }
                         # Element frisch holen, sonst wirkt die Umstellung nicht
@@ -1185,11 +1253,22 @@ try {
     if ($hr -ne 0) { Info ("Fehlernummer: 0x{0:X8}" -f $hr) }
     $belegt = Zeige-Belegung
     if (-not $belegt) {
-        Info "Moegliche Ursachen:"
-        Info "  - das Geraet ist aus oder das USB-Kabel steckt nicht fest"
-        Info "  - der Treiber verweigert eine Einstellung: 'Scan.bat /einfach' versuchen"
-        Info "  - ein Neustart loest haengende Treiberteile"
-        Info "Mehr Hinweise liefert Diagnose.bat"
+        if ($duplexGewuenscht) {
+            Info "Der Scanner hat das Blatt eingezogen, gibt das Bild aber nicht heraus."
+            Info "Dieser Treiber nimmt die Duplex-Vorgabe offenbar nicht von aussen an."
+            Info ""
+            Info "So geht es trotzdem beidseitig:"
+            Info "  1. Scan.bat /dialog      Einstellungen des Treibers oeffnen,"
+            Info "                           dort Duplex waehlen und mit OK bestaetigen"
+            Info "  2. Diagnose.bat /duplextest   zeigt, welche Schreibweisen er kennt"
+            Info "  3. ohne Haken bei Vorder-/Rueckseite scannt er wie gewohnt einseitig"
+        } else {
+            Info "Moegliche Ursachen:"
+            Info "  - das Geraet ist aus oder das USB-Kabel steckt nicht fest"
+            Info "  - der Treiber verweigert eine Einstellung: 'Scan.bat /einfach' versuchen"
+            Info "  - ein Neustart loest haengende Treiberteile"
+            Info "Mehr Hinweise liefert Diagnose.bat"
+        }
     }
     Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
     exit 5
@@ -1202,7 +1281,11 @@ if ($rohSeiten.Count -eq 0) {
     if ($duplexGewuenscht) {
         Info "Hat der Scanner beim ersten Versuch schon ein Blatt eingezogen, liegt jetzt"
         Info "keines mehr im Fach - bitte neu einlegen und erneut starten."
-        Info "Welche Duplex-Schreibweise das Geraet annimmt, zeigt:  Diagnose.bat /duplextest"
+        Info ""
+        Info "Nimmt dieser Treiber keine Duplex-Vorgabe an, hilft der Weg ueber seinen"
+        Info "eigenen Einstellungsdialog:"
+        Info "    Scan.bat /dialog        dort Duplex einstellen und mit OK bestaetigen"
+        Info "    Diagnose.bat /duplextest   zeigt, welche Schreibweisen er kennt"
     }
     Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
     exit 4
@@ -1361,8 +1444,10 @@ Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyCon
 # Zusammenfassung
 # ---------------------------------------------------------------------------
 if ($duplexGewuenscht -and -not $duplex) {
-    Warn "Es wurde einseitig gescannt - der Treiber nimmt ueber WIA keine Duplex-Einstellung an."
-    Info "Welche Schreibweise Ihr Geraet akzeptiert, zeigt:  Diagnose.bat /duplextest"
+    Warn "Es wurde einseitig gescannt - der Treiber nimmt ueber WIA keine Duplex-Vorgabe an."
+    Info "Beidseitig geht ueber die Einstellung im Treiber selbst:"
+    Info "    Scan.bat /dialog        Duplex dort einstellen und mit OK bestaetigen"
+    Info "Welche Schreibweise das Geraet sonst kennt, zeigt:  Diagnose.bat /duplextest"
 }
 $seitenWort = if ($rohSeiten.Count -eq 1) { 'Seite' } else { 'Seiten' }
 if ($leereSeiten -gt 0) {

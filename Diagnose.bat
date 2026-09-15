@@ -472,8 +472,11 @@ if ($env:DIAG_ARGS -match '/duplextest') {
                 }
             } else {
                 Warnung 'Keine Duplex-Schreibweise wird uebernommen.'
-                Punkt 'Dieser WIA-Treiber kann beidseitiges Scannen nicht - das Geraet selbst schon:'
-                Punkt 'ueber Canon CaptureOnTouch oder die Treibereinstellung (ISIS/TWAIN) bleibt es moeglich.'
+                Punkt 'Dieser WIA-Treiber nimmt keine Duplex-Vorgabe von aussen an. Das Geraet'
+                Punkt 'kann es trotzdem - die Einstellung muss nur im Treiber selbst stehen:'
+                Punkt '    Scan.bat /dialog      Einstellungen des Treibers oeffnen,'
+                Punkt '                          dort Duplex waehlen, mit OK bestaetigen'
+                Punkt 'Im Fenster: Service -> Knopf "Treiber ..." neben der Scannerauswahl.'
             }
         } catch {
             Schlecht ("Der Duplex-Test ist fehlgeschlagen: {0}" -f $_.Exception.Message.Trim())
