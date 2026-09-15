@@ -535,6 +535,10 @@ if ($naps2Pfad) {
             }
         }
         Punkt ''
+        Punkt 'Die Namen unterscheiden sich je Treiber ("CANON DR-C240" gegenueber'
+        Punkt '"CANON DR-C240 USB"). Scan.bat ordnet den eingestellten Scanner selbst'
+        Punkt 'zu; nur wenn das misslingt, einen der oben genannten Namen eintragen.'
+        Punkt ''
         Punkt 'Scannen darueber:  Scan.bat /naps2 /duplex'
     } else {
         Punkt 'Geraete auflisten:  Diagnose.bat /naps2'

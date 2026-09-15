@@ -172,6 +172,89 @@ HERAUSGEBER
 # wird hier nur zum Einlesen der Seiten benutzt; alles Weitere macht dieses
 # Programm selbst.
 # ---------------------------------------------------------------------------
+# Textdatei einlesen: NAPS2 schreibt UTF-8, aeltere Fassungen die Codepage des
+# Systems. Erst streng als UTF-8 versuchen, sonst auf die Systemcodepage
+# zurueckfallen - sonst stehen Umlaute als 'Ã¤' im Protokoll.
+function Lies-Textdatei([string]$pfad) {
+    if (-not (Test-Path -LiteralPath $pfad)) { return @() }
+    try {
+        $roh = [IO.File]::ReadAllBytes($pfad)
+    } catch { return @() }
+    if ($roh.Length -eq 0) { return @() }
+    $text = $null
+    try {
+        $streng = New-Object System.Text.UTF8Encoding($false, $true)
+        $text = $streng.GetString($roh)
+    } catch {
+        $text = [Text.Encoding]::Default.GetString($roh)
+    }
+    return @($text -split "`r?`n")
+}
+
+# Geraete abfragen, die NAPS2 ueber den angegebenen Treiber meldet
+function Get-Naps2Geraete([string]$naps2, [string]$treiber) {
+    $tmp = [IO.Path]::Combine([IO.Path]::GetTempPath(), ('naps2_liste_' + [Guid]::NewGuid().ToString('N') + '.txt'))
+    try {
+        $lauf = Start-Process -FilePath $naps2 -ArgumentList ('--listdevices --driver ' + $treiber) `
+                    -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tmp
+        $zeilen = @(Lies-Textdatei $tmp | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    } catch {
+        $zeilen = @()
+    }
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    return $zeilen
+}
+
+# Namen auf das Wesentliche eindampfen: Gross-/Kleinschreibung, Leer- und
+# Sonderzeichen sowie die Zusaetze weg, die je nach Treiber unterschiedlich
+# dranhaengen ('WIA-CANON DR-C240 USB' und 'CANON DR-C240 TWAIN' sind dasselbe).
+function Get-Namenskern([string]$name) {
+    $kern = "$name".ToUpperInvariant()
+    foreach ($zusatz in @('WIA-', 'TWAIN-', 'ESCL-', ' WIA', ' TWAIN', ' ESCL', ' USB', ' LAN', ' NETWORK')) {
+        $kern = $kern.Replace($zusatz, ' ')
+    }
+    return (($kern -replace '[^A-Z0-9]', ''))
+}
+
+# Den von der Einrichtung gewaehlten Scanner in der NAPS2-Liste wiederfinden.
+# Gibt den Namen zurueck, den NAPS2 selbst verwendet - oder $null.
+function Find-Naps2Geraet([string]$gesucht, [string[]]$geraete) {
+    if (-not $gesucht -or $geraete.Count -eq 0) { return $null }
+
+    foreach ($g in $geraete) { if ($g -eq $gesucht) { return $g } }
+    foreach ($g in $geraete) { if ($g -ieq $gesucht) { return $g } }
+
+    # Teilzeichenkette in die eine oder andere Richtung
+    foreach ($g in $geraete) {
+        if ($g -like "*$gesucht*" -or $gesucht -like "*$g*") { return $g }
+    }
+
+    # Kern vergleichen
+    $kernGesucht = Get-Namenskern $gesucht
+    if ($kernGesucht) {
+        foreach ($g in $geraete) {
+            $kern = Get-Namenskern $g
+            if ($kern -and ($kern -eq $kernGesucht -or $kern.Contains($kernGesucht) -or $kernGesucht.Contains($kern))) {
+                return $g
+            }
+        }
+    }
+
+    # Modellbezeichnung: das laengste Stueck aus Buchstaben und Ziffern,
+    # das eine Ziffer enthaelt - bei 'CANON DR-C240 USB' also 'DRC240'
+    $modell = ''
+    foreach ($wort in ("$gesucht" -split '[^A-Za-z0-9-]')) {
+        $sauber = ($wort.ToUpperInvariant() -replace '[^A-Z0-9]', '')
+        if ($sauber -match '\d' -and $sauber.Length -gt $modell.Length) { $modell = $sauber }
+    }
+    if ($modell.Length -ge 4) {
+        foreach ($g in $geraete) {
+            if ((Get-Namenskern $g).Contains($modell)) { return $g }
+        }
+    }
+    return $null
+}
+
 function Find-Naps2([string]$vorgabe) {
     if ($vorgabe) {
         if (Test-Path -LiteralPath $vorgabe -PathType Leaf) { return $vorgabe }
@@ -1003,6 +1086,40 @@ if ($nutzeNaps2) {
     # ---- Bildbeschaffung ueber NAPS2 ---------------------------------------
     Info "Scanweg: NAPS2 (Treiber: $naps2Treiber)"
 
+    # NAPS2 kennt den Scanner unter dem Namen, den der TWAIN-Treiber meldet -
+    # der weicht von dem der Windows-Bilderfassung ab ('CANON DR-C240 USB'
+    # gegenueber z.B. 'CANON DR-C240'). Darum den eingestellten Namen erst in
+    # der Liste von NAPS2 wiederfinden.
+    $naps2Geraet = $null
+    if ($geraetFilter -and -not $naps2Profil) {
+        $gemeldet = @(Get-Naps2Geraete $naps2Pfad $naps2Treiber)
+        if ($gemeldet.Count -eq 0) {
+            Warn "NAPS2 meldet ueber $naps2Treiber kein Geraet - es wird ohne Geraeteangabe gescannt."
+            if ($naps2Treiber -eq 'twain') {
+                Info "Ist der TWAIN-Treiber des Scanners installiert? Im Canon-Setup ist er enthalten."
+            }
+        } else {
+            $naps2Geraet = Find-Naps2Geraet $geraetFilter $gemeldet
+            if ($naps2Geraet) {
+                if ($naps2Geraet -ne $geraetFilter) {
+                    Info "  Scanner bei NAPS2: $naps2Geraet"
+                }
+            } elseif ($gemeldet.Count -eq 1) {
+                $naps2Geraet = $gemeldet[0]
+                Warn "'$geraetFilter' steht so nicht in der Liste von NAPS2 - es wird das einzige gemeldete Geraet verwendet:"
+                Info "  $naps2Geraet"
+            } else {
+                Fehler "NAPS2 kennt keinen Scanner, der zu '$geraetFilter' passt."
+                Info   "Ueber $naps2Treiber gemeldet werden:"
+                foreach ($g in $gemeldet) { Info ("  " + $g) }
+                Info   "Einen dieser Namen im Servicebereich unter 'Scanner' eintragen"
+                Info   'oder auf der Kommandozeile angeben:  Scan.bat /naps2 /scanner "<Name>"'
+                Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
+                exit 3
+            }
+        }
+    }
+
     $muster = [IO.Path]::Combine($arbeitsOrdner, 'Seite_$(nnnn).jpg')
     $teile = @(
         '-o', ('"' + $muster + '"')
@@ -1019,7 +1136,7 @@ if ($nutzeNaps2) {
         'sw'    { $teile += @('--bitdepth', 'bw') }
     }
     if ($duplex) { $teile += @('--source', 'duplex') } else { $teile += @('--source', 'feeder') }
-    if ($geraetFilter) { $teile += @('--device', ('"' + $geraetFilter + '"')) }
+    if ($naps2Geraet)  { $teile += @('--device', ('"' + $naps2Geraet + '"')) }
     if ($naps2Profil)  { $teile += @('--profile', ('"' + $naps2Profil + '"')) }
     if ($seitenGroesse){ $teile += @('--pagesize', $seitenGroesse) }
 
@@ -1041,13 +1158,15 @@ if ($nutzeNaps2) {
         exit 5
     }
 
+    $meldungen = @()
     foreach ($datei in @($ausgabeDatei, $fehlerDatei)) {
-        if (Test-Path -LiteralPath $datei) {
-            foreach ($zeile in (Get-Content -LiteralPath $datei -ErrorAction SilentlyContinue)) {
-                if ("$zeile".Trim()) { Info ("  " + "$zeile".Trim()) }
+        foreach ($zeile in (Lies-Textdatei $datei)) {
+            if ("$zeile".Trim()) {
+                $meldungen += "$zeile".Trim()
+                Info ("  " + "$zeile".Trim())
             }
-            Remove-Item -LiteralPath $datei -Force -ErrorAction SilentlyContinue
         }
+        Remove-Item -LiteralPath $datei -Force -ErrorAction SilentlyContinue
     }
 
     $rohSeiten = @(Get-ChildItem -LiteralPath $arbeitsOrdner -Filter 'Seite_*.jpg' -ErrorAction SilentlyContinue |
@@ -1055,8 +1174,19 @@ if ($nutzeNaps2) {
 
     if ($rohSeiten.Count -eq 0) {
         Fehler "Es wurde keine Seite geliefert (Rueckgabewert $rueckgabe)."
-        Info   "Pruefen Sie: Liegt Papier im Einzug? Ist der richtige Scanner eingestellt?"
-        Info   "Angeschlossene Geraete zeigt:  Diagnose.bat /naps2"
+        if (($meldungen -join ' ') -match 'kann nicht gefunden werden|not be found|no (such )?device|Geraet') {
+            Info "NAPS2 hat den Scanner nicht gefunden. Ueber $naps2Treiber gemeldet werden:"
+            $gemeldet = @(Get-Naps2Geraete $naps2Pfad $naps2Treiber)
+            if ($gemeldet.Count -eq 0) {
+                Info "  (keines - ist der TWAIN-Treiber des Scanners installiert?)"
+            } else {
+                foreach ($g in $gemeldet) { Info ("  " + $g) }
+                Info "Einen dieser Namen im Servicebereich unter 'Scanner' eintragen."
+            }
+        } else {
+            Info "Pruefen Sie: Liegt Papier im Einzug? Ist der richtige Scanner eingestellt?"
+            Info "Angeschlossene Geraete zeigt:  Diagnose.bat /naps2"
+        }
         Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
         exit 4
     }

@@ -511,6 +511,26 @@ listet die Geräte auf, die NAPS2 über TWAIN sieht. Steht der DR-C240 dabei, is
 alles bereit. `Diagnose.bat` allein prüft in Abschnitt 10 ohnehin mit, ob NAPS2
 installiert ist und wo.
 
+### „Der gewählte Scanner kann nicht gefunden werden"
+
+NAPS2 bekommt über **TWAIN andere Gerätenamen** als Windows über WIA: Was in
+der Windows-Bilderfassung `CANON DR-C240 USB` heißt, meldet der TWAIN-Treiber
+oft als `CANON DR-C240`. Das Programm gleicht den eingestellten Namen deshalb
+selbst mit der Liste von NAPS2 ab und nimmt den passenden Eintrag — im
+Protokoll steht dann `Scanner bei NAPS2: …`.
+
+Findet es keinen passenden Eintrag, bricht es ab und zeigt, welche Geräte NAPS2
+kennt. Dann einen dieser Namen im Servicebereich unter *Scanner* eintragen oder
+angeben:
+
+```
+Scan.bat /naps2 /scanner "CANON DR-C240"
+```
+
+Meldet NAPS2 über TWAIN **gar kein** Gerät, fehlt der TWAIN-Treiber des
+Scanners — beim DR-C240 ist er im Canon-Setup enthalten und muss gegebenenfalls
+nachinstalliert werden. `Diagnose.bat /naps2` zeigt beide Listen nebeneinander.
+
 ### Wenn NAPS2 nicht da ist
 
 Ohne NAPS2 scannt das Programm weiter über Windows — einseitig ohne
