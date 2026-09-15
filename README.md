@@ -10,6 +10,7 @@ Zwei Dateien, die zusammengehören und im **selben Ordner** liegen müssen:
 |---|---|
 | **`Scanner.bat`** | kleines Fenster mit den wichtigsten Einstellungen — Zielordner einmal einstellen, danach nur noch auf *Scannen* klicken |
 | **`Scan.bat`** | die eigentliche Scan-Funktion; läuft auch allein auf der Kommandozeile und wird vom Fenster aufgerufen |
+| **`Diagnose.bat`** | prüft bei Problemen Dienst, Treiber, Gerät und belegende Programme und schreibt einen Bericht auf den Desktop |
 
 Beides sind reine Bordmittel-Lösungen: Windows-Bilderfassung (WIA) und Windows
 PowerShell, keine Zusatzsoftware, keine Installation. Das Ergebnis landet
@@ -197,6 +198,7 @@ Scan.bat [Optionen]
 | `/farbe` `/grau` `/sw` | Farbe (Standard), Graustufen, Schwarzweiß |
 | `/dpi <Zahl>` | Auflösung, z. B. `150`, `200`, `300`, `400`, `600` |
 | `/duplex` | Vorder- und Rückseite scannen |
+| `/einfach` | ohne eigene Geräteeinstellungen scannen (bei Treiberfehlern) |
 | `/gerade` | schräg eingezogene Seiten automatisch gerade richten |
 | `/drehen <Grad>` | alle Seiten fest drehen: `0`, `90`, `180` oder `270` |
 | `/leerseiten` | leere Seiten (z. B. unbedruckte Rückseiten) weglassen |
@@ -297,9 +299,36 @@ Prüfen, ob der WIA-Dienst läuft — in einer Eingabeaufforderung als Administr
 net start stisvc
 ```
 
+**„Schwerwiegender Fehler“ beim Scannen**
+Das ist die Standardmeldung von Windows, wenn **ein anderes Programm den
+Scanner hält**. Bei Canon ist das fast immer **CaptureOnTouch**, das sich mit
+Windows startet und im Hintergrund auf den Tastendruck am Gerät wartet.
+
+```
+Diagnose.bat /freigeben
+```
+
+beendet alle Programme, die den Scanner belegen (CaptureOnTouch samt Lite- und
+Hintergrundteil, Tastenüberwachung, Windows-Fax und -Scan, der Scan-Assistent,
+NAPS2 und weitere) — danach lässt sich sofort wieder scannen. Im Fenster gibt
+es dafür den Knopf **Scanner freigeben** im Servicebereich; und schlägt ein
+Scan fehl, fragt das Programm von sich aus, ob es die störenden Programme
+beenden soll, und wiederholt den Scan danach automatisch.
+
+Damit CaptureOnTouch gar nicht erst stört, kann es im Autostart deaktiviert
+werden: *Task-Manager → Autostart → CaptureOnTouch → Deaktivieren*.
+
+Hilft das nicht, kann auch der Treiber über eine Einstellung stolpern:
+
+```
+Scan.bat /einfach
+```
+
+scannt dann ohne eigene Vorgaben mit dem, was im Treiber eingestellt ist.
+
 **„Der Scanvorgang ist fehlgeschlagen“ / Scanner reagiert nicht**
-Eine andere Anwendung belegt das Gerät. Canon CaptureOnTouch, Windows-Fax und
--Scan oder eine Scan-Software schließen und erneut versuchen.
+Eine andere Anwendung belegt das Gerät (siehe oben), oder das Gerät hängt:
+aus- und einschalten, USB-Kabel direkt am Rechner (kein Hub).
 
 **Das Fenster schließt sich sofort**
 Beim Doppelklick bleibt das Fenster bis zum Tastendruck offen. Schließt es sich
@@ -330,6 +359,28 @@ versuchen (`/dpi 200`) oder im Canon-Treiber die Vorlagengröße auf A4 stellen.
 Die Batchdatei stellt die Konsole auf UTF-8 um und danach zurück. Bei sehr alten
 Konsoleneinstellungen kann die Anzeige abweichen — die Dateien sind davon nicht
 betroffen.
+
+### Diagnose bei Problemen
+
+`Diagnose.bat` per Doppelklick starten. Geprüft wird:
+
+1. Windows- und PowerShell-Version
+2. Dienst *Windows-Bilderfassung (WIA)* — läuft er?
+3. alle von Windows gemeldeten Bildgeräte
+4. Geräte-Manager samt Problemcodes (Code 28 = kein Treiber, Code 10 = startet
+   nicht, Code 43 = angehalten …)
+5. installierte Treiberarten (TWAIN-Quellen, Canon-Software)
+6. **Programme, die den Scanner belegen**
+7. Verbindungstest mit Fähigkeiten, Papierstatus und Bildformaten
+
+Am Ende steht eine Bewertung im Klartext, was zu tun ist. Der vollständige
+Bericht landet als Textdatei auf dem Desktop und lässt sich weitergeben.
+
+| Aufruf | Wirkung |
+|---|---|
+| `Diagnose.bat` | nur prüfen |
+| `Diagnose.bat /scan` | zusätzlich eine Testseite einziehen |
+| `Diagnose.bat /freigeben` | Programme beenden, die den Scanner belegen |
 
 ### Rückgabewerte
 
