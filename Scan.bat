@@ -80,9 +80,11 @@ $WIA_IPS_YPOS                     = 6150
 $WIA_IPS_XEXTENT                  = 6151
 $WIA_IPS_YEXTENT                  = 6152
 
-$HANDLE_FEEDER  = 1
-$HANDLE_FLATBED = 2
-$HANDLE_DUPLEX  = 4
+$HANDLE_FEEDER      = 1
+$HANDLE_FLATBED     = 2
+$HANDLE_DUPLEX      = 4
+$HANDLE_FRONT_FIRST = 8
+$HANDLE_FRONT_ONLY  = 32
 
 $FMT_JPEG = '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}'
 $FMT_PNG  = '{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}'
@@ -775,6 +777,8 @@ if ($festDrehen -ne 0 -and $festDrehen -ne 90 -and $festDrehen -ne 180 -and $fes
 }
 if ($wartenSek -lt 0) { $wartenSek = 0 }
 
+$duplexGewuenscht = $duplex     # merken, bevor der Treiber es eventuell ablehnt
+
 $ungueltig = [IO.Path]::GetInvalidFileNameChars()
 $basisName = -join ($basisName.ToCharArray() | Where-Object { $ungueltig -notcontains $_ })
 if ([string]::IsNullOrWhiteSpace($basisName)) { $basisName = 'Scan' }
@@ -876,13 +880,46 @@ $faehigkeiten = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_CAPS
 if ($null -eq $faehigkeiten) { $faehigkeiten = $HANDLE_FEEDER }
 $hatEinzug = ($faehigkeiten -band $HANDLE_FEEDER) -ne 0
 
+# Die Einzugsart gibt es zweimal: am Geraet und am Scan-Element. Laut
+# Microsoft muss zuerst das Element und danach das Geraet gesetzt werden -
+# in der anderen Reihenfolge nehmen viele Treiber den Wert nicht an.
+# Anschliessend wird zurueckgelesen: Nur wenn der Wert wirklich steht, hat
+# der Treiber ihn angenommen. So finden wir die passende Schreibweise, ohne
+# dafuer Papier zu verbrauchen.
+function Setze-Handling([int]$wert) {
+    $steht = $false
+    foreach ($sammlung in @($script:Element.Properties, $script:Geraet.Properties)) {
+        $p = Get-WiaProp $sammlung $WIA_DPS_DOCUMENT_HANDLING_SELECT
+        if ($null -eq $p) { continue }
+        try { $p.Value = $wert } catch { continue }
+        try { if ([int]$p.Value -eq $wert) { $steht = $true } } catch { }
+    }
+    return $steht
+}
+
+# Welche Werte meldet der Treiber als gueltig? (nur zur Anzeige)
+function Get-HandlingWerte {
+    $liste = @()
+    foreach ($sammlung in @($script:Element.Properties, $script:Geraet.Properties)) {
+        $p = Get-WiaProp $sammlung $WIA_DPS_DOCUMENT_HANDLING_SELECT
+        if ($null -eq $p) { continue }
+        try { foreach ($w in $p.SubTypeValues) { $liste += [int]$w } } catch { }
+    }
+    return ($liste | Select-Object -Unique)
+}
+
 # Nicht jeder Treiber versteht dieselbe Schreibweise fuer Duplex. Deshalb
 # stehen mehrere bereit; scheitert der Scan, wird der Reihe nach umgestellt
 # und zuletzt einseitig gescannt, statt ganz aufzugeben.
+$script:Geraet  = $geraet
+$script:Element = $element
+
 $einzugsWege = @()
 if ($hatEinzug) {
     if ($duplex) {
         if (($faehigkeiten -band $HANDLE_DUPLEX) -ne 0) {
+            # von der empfohlenen Schreibweise absteigend zur einfachsten
+            $einzugsWege += @{ Wert = ($HANDLE_FEEDER -bor $HANDLE_DUPLEX -bor $HANDLE_FRONT_FIRST); Text = 'Einzug + Duplex + Vorderseite zuerst'; Duplex = $true }
             $einzugsWege += @{ Wert = ($HANDLE_FEEDER -bor $HANDLE_DUPLEX); Text = 'Einzug + Duplex'; Duplex = $true }
             $einzugsWege += @{ Wert = $HANDLE_DUPLEX;                       Text = 'nur Duplex';      Duplex = $true }
         } else {
@@ -890,33 +927,51 @@ if ($hatEinzug) {
             $duplex = $false
         }
     }
+    $einzugsWege += @{ Wert = ($HANDLE_FEEDER -bor $HANDLE_FRONT_ONLY); Text = 'Einzug, nur Vorderseite'; Duplex = $false }
     $einzugsWege += @{ Wert = $HANDLE_FEEDER; Text = 'Einzug einseitig'; Duplex = $false }
 } elseif (($faehigkeiten -band $HANDLE_FLATBED) -ne 0) {
     $einzugsWege += @{ Wert = $HANDLE_FLATBED; Text = 'Flachbett'; Duplex = $false }
 }
 
-$wegNummer = 0
 if ($duplexWert -gt 0) {
     # von Hand vorgegeben: nur diesen Wert verwenden
     $einzugsWege = @(@{ Wert = $duplexWert; Text = "fest vorgegeben ($duplexWert)"; Duplex = (($duplexWert -band $HANDLE_DUPLEX) -ne 0) })
 }
 
+$script:EinzugsWege = $einzugsWege
+
 function Setze-Einzugsart([int]$nummer) {
     if ($nummer -ge $script:EinzugsWege.Count) { return $false }
-    $weg = $script:EinzugsWege[$nummer]
-    if (-not (Set-WiaWert $script:Geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_SELECT $weg.Wert)) {
-        return $false
-    }
-    return $true
+    return (Setze-Handling ([int]$script:EinzugsWege[$nummer].Wert))
 }
 
-$script:EinzugsWege = $einzugsWege
-$script:Geraet = $geraet
+# Die erste Schreibweise suchen, die der Treiber wirklich uebernimmt
+$wegNummer   = -1
 $einzugsWert = 0
-if ($einzugsWege.Count -gt 0) {
-    $einzugsWert = $einzugsWege[0].Wert
-    if (-not (Setze-Einzugsart 0)) {
-        Warn "Die Einzugsart '$($einzugsWege[0].Text)' laesst sich nicht setzen - es gilt die Geraeteeinstellung."
+for ($n = 0; $n -lt $einzugsWege.Count; $n++) {
+    if (Setze-Einzugsart $n) {
+        $wegNummer   = $n
+        $einzugsWert = $einzugsWege[$n].Wert
+        break
+    }
+}
+
+if ($wegNummer -lt 0) {
+    if ($einzugsWege.Count -gt 0) {
+        Warn "Keine Einzugsart wurde uebernommen - es gilt die Einstellung des Treibers."
+        $gueltig = @(Get-HandlingWerte)
+        if ($gueltig.Count -gt 0) { Info ("Der Treiber meldet als gueltig: " + ($gueltig -join ', ')) }
+        $wegNummer = 0
+        $einzugsWert = $einzugsWege[0].Wert
+    }
+} else {
+    $weg = $einzugsWege[$wegNummer]
+    if ($duplex -and -not $weg.Duplex) {
+        Warn "Der Treiber nimmt keine Duplex-Einstellung an - es wird einseitig gescannt."
+        Info "Welche Schreibweisen Ihr Geraet kennt, zeigt:  Diagnose.bat /duplextest"
+        $duplex = $false
+    } elseif ($wegNummer -gt 0 -and $weg.Duplex) {
+        Info "Duplex ueber: $($weg.Text)"
     }
 }
 # Pro Transfer genau eine Seite liefern, die Schleife unten holt die weiteren Seiten.
@@ -979,7 +1034,6 @@ if (-not $dpiGesetzt) {
 $modusText = switch ($farbmodus) { 'farbe' { 'Farbe' } 'grau' { 'Graustufen' } 'sw' { 'Schwarzweiss' } }
 if ($einfach) { $modusText = 'Geraetevorgabe' }
 $seitenText = if ($duplex) { 'Duplex' } else { 'Einseitig' }
-$duplexGewuenscht = $duplex
 $leerText = ''
 if ($geradeRichten) { $leerText += ', gerade richten' }
 if ($festDrehen -ne 0) { $leerText += ", um $festDrehen Grad drehen" }
@@ -1060,7 +1114,10 @@ try {
                 } catch {
                     $hrErst = Get-HResult $_.Exception
                     $istPapierfehler = ($hrErst -eq $ERR_PAPER_EMPTY -or $hrErst -eq $ERR_PAPER_JAM -or $hrErst -eq $ERR_OFFLINE)
-                    if ($seitenNr -ne 1 -or $istPapierfehler -or $rettung -ge 4) { throw }
+                    # Beim ersten Anlauf heisst "kein Papier" wirklich kein Papier.
+                    # Danach kann es auch an der geaenderten Einzugsart liegen.
+                    if ($seitenNr -ne 1 -or $rettung -ge 5) { throw }
+                    if ($istPapierfehler -and $rettung -eq 0) { throw }
                     $rettung++
 
                     if (($wegNummer + 1) -lt $einzugsWege.Count) {
@@ -1069,14 +1126,18 @@ try {
                         Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
                         if ($weg.Duplex) {
                             Warn "Diese Duplex-Einstellung lehnt der Treiber ab - es wird '$($weg.Text)' versucht."
-                        } else {
+                        } elseif ($duplex) {
                             Warn "Der Treiber beherrscht Duplex ueber WIA nicht - es wird einseitig gescannt."
                             Info "Beidseitig geht dann ueber die Einstellung im Canon-Treiber oder CaptureOnTouch."
                             $duplex = $false
                         }
+                        # Element frisch holen, sonst wirkt die Umstellung nicht
+                        try {
+                            $element = $geraet.Items.Item(1)
+                            $script:Element = $element
+                        } catch { }
                         [void](Setze-Einzugsart $wegNummer)
                         $einzugsWert = $weg.Wert
-                        try { $element = $geraet.Items.Item(1) } catch { }
                         Write-Host ("  Seite {0} wird gescannt ..." -f $seitenNr) -NoNewline
                         continue
                     }
@@ -1138,6 +1199,11 @@ if ($abbruch) { Warn $abbruch }
 
 if ($rohSeiten.Count -eq 0) {
     Fehler "Es wurde keine Seite eingezogen."
+    if ($duplexGewuenscht) {
+        Info "Hat der Scanner beim ersten Versuch schon ein Blatt eingezogen, liegt jetzt"
+        Info "keines mehr im Fach - bitte neu einlegen und erneut starten."
+        Info "Welche Duplex-Schreibweise das Geraet annimmt, zeigt:  Diagnose.bat /duplextest"
+    }
     Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
     exit 4
 }

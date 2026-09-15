@@ -328,28 +328,37 @@ Scan.bat /einfach
 scannt dann ohne eigene Vorgaben mit dem, was im Treiber eingestellt ist.
 
 **Fehler nur bei „Vorder- und Rückseite", einseitig geht es**
-Dann lehnt der WIA-Treiber die Duplex-Einstellung ab — kein Defekt, sondern
-eine Eigenheit mancher Treiber. Es gibt zwei Schreibweisen dafür
-(*Einzug + Duplex* = 5 und *nur Duplex* = 4), und nicht jeder Treiber nimmt
-dieselbe an.
+Dann nimmt der WIA-Treiber die Duplex-Einstellung nicht an — kein Defekt,
+sondern eine Eigenheit vieler Treiber.
 
-Das Programm regelt das inzwischen selbst: Scheitert die erste Seite, stellt es
-auf die zweite Schreibweise um, und erst wenn auch die abgelehnt wird, scannt es
-einseitig weiter — mit einem Hinweis, statt den Vorgang abzubrechen. Sie
-bekommen also in jedem Fall Ihre Scans.
+Die Einzugsart gibt es in WIA nämlich **zweimal**: am Gerät *und* am
+Scan-Element. Microsoft schreibt dazu zwei Dinge, die den Unterschied machen:
+zuerst muss das **Element** gesetzt werden und danach das Gerät, und für
+beidseitiges Scannen ist `FEEDER | DUPLEX | FRONT_FIRST` (Wert **13**)
+vorgesehen — nicht nur `FEEDER | DUPLEX` (5).
 
-Welche Schreibweise Ihr Gerät annimmt, zeigt (Blätter einlegen, es wird je
-Versuch eines eingezogen):
+Das Programm setzt die Einstellung deshalb an beiden Stellen in der richtigen
+Reihenfolge und **liest sie zurück**: Nur wenn der Wert danach wirklich steht,
+hat der Treiber ihn angenommen. Probiert werden der Reihe nach 13, 5 und 4 —
+und das alles, bevor das erste Blatt eingezogen wird, also ohne Papier zu
+verbrauchen. Nimmt der Treiber keine davon an, sagt das Programm es vor dem
+Scan und scannt einseitig weiter, statt abzubrechen.
+
+Welche Schreibweise Ihr Gerät annimmt, zeigt (ohne Papierverbrauch):
 
 ```
 Diagnose.bat /duplextest
 ```
 
-Meldet der Test eine funktionierende Variante, lässt sie sich fest einstellen,
-dann entfallen die Fehlversuche:
+Der Test nennt die gültigen Werte des Treibers, welche Schreibweise er annimmt
+und an welcher Stelle (Element, Gerät oder beide). Mit `/duplextest /scan` wird
+die gefundene Variante zusätzlich mit einem echten Blatt gegengeprüft.
+
+Die gefundene Variante lässt sich fest einstellen, dann entfallen alle
+Fehlversuche:
 
 ```
-Scan.bat /duplex /duplexwert 4
+Scan.bat /duplex /duplexwert 13
 ```
 
 Nimmt der Treiber gar keine an, bleibt beidseitiges Scannen über die

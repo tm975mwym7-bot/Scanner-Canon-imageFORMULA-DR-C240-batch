@@ -384,62 +384,99 @@ if ($env:DIAG_ARGS -match '/duplextest') {
     if ($wiaGeraete.Count -eq 0) {
         Punkt 'uebersprungen - kein Scanner gefunden.'
     } else {
-        Punkt 'Fuer jeden Versuch wird ein Blatt eingezogen. Bitte genug Blaetter einlegen.'
-        Punkt ''
+        # Die Einzugsart gibt es am Geraet und am Scan-Element. Laut Microsoft
+        # muss erst das Element und dann das Geraet gesetzt werden. Ob der
+        # Treiber einen Wert wirklich annimmt, zeigt das Zurueck-Lesen - dafuer
+        # wird kein Blatt eingezogen.
         $varianten = @(
-            @{ Wert = 5; Text = 'Einzug + Duplex (Wert 5)' }
-            @{ Wert = 4; Text = 'nur Duplex (Wert 4)' }
-            @{ Wert = 1; Text = 'Einzug einseitig (Wert 1)' }
+            @{ Wert = 13; Text = 'Einzug + Duplex + Vorderseite zuerst (13)'; Duplex = $true }
+            @{ Wert =  5; Text = 'Einzug + Duplex (5)';                       Duplex = $true }
+            @{ Wert =  4; Text = 'nur Duplex (4)';                            Duplex = $true }
+            @{ Wert = 33; Text = 'Einzug, nur Vorderseite (33)';              Duplex = $false }
+            @{ Wert =  1; Text = 'Einzug einseitig (1)';                      Duplex = $false }
         )
-        $geht = @()
-        foreach ($v in $varianten) {
-            try {
-                $g = $wiaGeraete[0].Connect()
-                $gesetzt = $false
-                foreach ($prop in $g.Properties) {
+        try {
+            $g  = $wiaGeraete[0].Connect()
+            $it = $g.Items.Item(1)
+
+            $gueltig = @()
+            foreach ($sammlung in @($it.Properties, $g.Properties)) {
+                foreach ($prop in $sammlung) {
                     if ($prop.PropertyID -eq 3088) {
-                        try { $prop.Value = $v.Wert; $gesetzt = $true } catch { }
+                        try { foreach ($w in $prop.SubTypeValues) { $gueltig += [int]$w } } catch { }
                     }
                 }
-                if (-not $gesetzt) {
-                    Warnung ("{0}: laesst sich nicht einstellen" -f $v.Text)
-                    continue
+            }
+            $gueltig = @($gueltig | Select-Object -Unique | Sort-Object)
+            if ($gueltig.Count -gt 0) { Punkt ("Der Treiber meldet als gueltig: " + ($gueltig -join ', ')) }
+            else { Punkt 'Der Treiber meldet keine Liste gueltiger Werte.' }
+            Punkt ''
+
+            $genommen = @()
+            foreach ($v in $varianten) {
+                $amElement = $false
+                $amGeraet  = $false
+                foreach ($prop in $it.Properties) {
+                    if ($prop.PropertyID -eq 3088) {
+                        try { $prop.Value = $v.Wert } catch { }
+                        try { if ([int]$prop.Value -eq $v.Wert) { $amElement = $true } } catch { }
+                    }
                 }
-                $it = $g.Items.Item(1)
-                $bild = $it.Transfer('{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}')
-                $tmp = [IO.Path]::Combine([IO.Path]::GetTempPath(), ("duplextest_{0}.jpg" -f $v.Wert))
-                if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
-                $bild.SaveFile($tmp)
-                Gut ("{0}: funktioniert" -f $v.Text)
-                $geht += $v
-                Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-            } catch {
-                $hr3 = 0
-                $ex3 = $_.Exception
-                while ($null -ne $ex3) {
-                    if ($ex3 -is [System.Runtime.InteropServices.COMException]) { $hr3 = $ex3.HResult; break }
-                    $ex3 = $ex3.InnerException
+                foreach ($prop in $g.Properties) {
+                    if ($prop.PropertyID -eq 3088) {
+                        try { $prop.Value = $v.Wert } catch { }
+                        try { if ([int]$prop.Value -eq $v.Wert) { $amGeraet = $true } } catch { }
+                    }
                 }
-                if ($hr3 -eq -2145320957) {
-                    Warnung ("{0}: kein Papier mehr - bitte Blaetter nachlegen und erneut testen" -f $v.Text)
+                $wo = @()
+                if ($amElement) { $wo += 'Element' }
+                if ($amGeraet)  { $wo += 'Geraet' }
+                if ($wo.Count -gt 0) {
+                    Gut ("{0}: angenommen ({1})" -f $v.Text, ($wo -join ' und '))
+                    $genommen += $v
                 } else {
-                    Schlecht ("{0}: schlaegt fehl ({1}{2})" -f $v.Text, $_.Exception.Message.Trim(),
-                              $(if ($hr3 -ne 0) { ', 0x{0:X8}' -f $hr3 } else { '' }))
+                    Punkt ("{0}: wird nicht uebernommen" -f $v.Text)
                 }
             }
-        }
-        Punkt ''
-        if ($geht.Count -eq 0) {
-            Schlecht 'Keine Einstellung wurde angenommen.'
-        } else {
-            $besteDuplex = $geht | Where-Object { $_.Wert -ne 1 } | Select-Object -First 1
+
+            Punkt ''
+            $besteDuplex = $genommen | Where-Object { $_.Duplex } | Select-Object -First 1
             if ($besteDuplex) {
-                Gut ("Beidseitig geht mit: {0}" -f $besteDuplex.Text)
-                Punkt ("Fest einstellen mit:  Scan.bat /duplex /duplexwert {0}" -f $besteDuplex.Wert)
+                Gut ("Beidseitig sollte gehen mit: {0}" -f $besteDuplex.Text)
+                Punkt ("Fest einstellen:  Scan.bat /duplex /duplexwert {0}" -f $besteDuplex.Wert)
+                Punkt ''
+                Punkt 'Zum Gegenpruefen mit Papier:  Diagnose.bat /duplextest /scan'
+                if ($env:DIAG_ARGS -match '/scan') {
+                    Punkt ''
+                    Punkt ("Es wird ein Blatt mit '{0}' eingezogen ..." -f $besteDuplex.Text)
+                    foreach ($prop in $it.Properties) { if ($prop.PropertyID -eq 3088) { try { $prop.Value = $besteDuplex.Wert } catch { } } }
+                    foreach ($prop in $g.Properties)  { if ($prop.PropertyID -eq 3088) { try { $prop.Value = $besteDuplex.Wert } catch { } } }
+                    try {
+                        $bild = $it.Transfer('{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}')
+                        $tmp = [IO.Path]::Combine([IO.Path]::GetTempPath(), 'duplextest.jpg')
+                        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+                        $bild.SaveFile($tmp)
+                        Gut 'Der Scan mit dieser Einstellung funktioniert.'
+                        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                    } catch {
+                        $hr3 = 0
+                        $ex3 = $_.Exception
+                        while ($null -ne $ex3) {
+                            if ($ex3 -is [System.Runtime.InteropServices.COMException]) { $hr3 = $ex3.HResult; break }
+                            $ex3 = $ex3.InnerException
+                        }
+                        if ($hr3 -eq -2145320957) { Warnung 'Kein Papier im Einzug - bitte Blatt einlegen und erneut testen.' }
+                        else { Schlecht ("Der Scan schlaegt fehl: {0}{1}" -f $_.Exception.Message.Trim(),
+                                         $(if ($hr3 -ne 0) { ' (0x{0:X8})' -f $hr3 } else { '' })) }
+                    }
+                }
             } else {
-                Warnung 'Nur einseitig moeglich - dieser Treiber kann Duplex ueber WIA nicht.'
-                Punkt 'Beidseitig bleibt ueber Canon CaptureOnTouch oder die Treibereinstellung moeglich.'
+                Warnung 'Keine Duplex-Schreibweise wird uebernommen.'
+                Punkt 'Dieser WIA-Treiber kann beidseitiges Scannen nicht - das Geraet selbst schon:'
+                Punkt 'ueber Canon CaptureOnTouch oder die Treibereinstellung (ISIS/TWAIN) bleibt es moeglich.'
             }
+        } catch {
+            Schlecht ("Der Duplex-Test ist fehlgeschlagen: {0}" -f $_.Exception.Message.Trim())
         }
     }
 }
