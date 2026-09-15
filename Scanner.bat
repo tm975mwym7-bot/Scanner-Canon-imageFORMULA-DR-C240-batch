@@ -1158,9 +1158,31 @@ $btnTreiber.Add_Click({
              "Bei vielen Treibern bleibt diese Einstellung dauerhaft erhalten - dann " +
              "scannt das Programm auch ohne eigene Duplex-Vorgabe beidseitig."),
             'Treiber-Einstellungen', 'OK', 'Information')
-        $ok = $wiaDialog.ShowAcquisitionSettings($geraet)
-        if ($ok) { Setze-Status 'Die Treibereinstellungen wurden übernommen.' }
-        else     { Setze-Status 'Der Treiberdialog wurde abgebrochen.' }
+        $element = $geraet.Items.Item(1)
+        $geoeffnet = $false
+        $wege = @(
+            { $wiaDialog.ShowItemProperties($element, $false) }
+            { $wiaDialog.ShowItemProperties($element) }
+            { $wiaDialog.ShowDeviceProperties($geraet, $false) }
+            { $wiaDialog.ShowDeviceProperties($geraet) }
+        )
+        foreach ($weg in $wege) {
+            try { [void](& $weg); $geoeffnet = $true; break } catch { continue }
+        }
+        if ($geoeffnet) {
+            Setze-Status 'Die Treibereinstellungen wurden übernommen.'
+        } else {
+            $antwort = [System.Windows.Forms.MessageBox]::Show($form,
+                ("Dieser Treiber bietet keinen eigenen Einstellungsdialog an." + "`r`n`r`n" +
+                 "Duplex lässt sich stattdessen im Scanprofil von Windows festlegen:" + "`r`n" +
+                 "Scanner auswählen -> Scanprofile -> Bearbeiten -> Quelle:" + "`r`n" +
+                 "'Einzug (beidseitiger Scan)'." + "`r`n`r`n" +
+                 "Die Scanner-Einstellungen von Windows jetzt öffnen?"),
+                'Treiber-Einstellungen', 'YesNo', 'Question')
+            if ($antwort -eq [System.Windows.Forms.DialogResult]::Yes) {
+                try { Start-Process -FilePath 'control.exe' -ArgumentList 'sticpl.cpl' } catch { }
+            }
+        }
     } catch {
         [void][System.Windows.Forms.MessageBox]::Show($form,
             ("Der Treiber bietet keinen eigenen Einstellungsdialog an." + "`r`n`r`n" + $_.Exception.Message.Trim()),

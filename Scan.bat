@@ -935,19 +935,50 @@ function Get-HandlingWerte {
 # Auf Wunsch die Einstellungen des Treibers zeigen. Was dort eingestellt
 # wird - auch Duplex - gilt fuer den folgenden Scan.
 if ($dialog) {
+    Info "Die Einstellungen des Scanner-Treibers werden geoeffnet ..."
+    Info "Dort 'Scanseite' bzw. 'Scanning Side' auf Duplex stellen und mit OK bestaetigen."
+    $dialogOffen = $false
     try {
         $wiaDialog = New-Object -ComObject WIA.CommonDialog
-        Info "Die Einstellungen des Scanner-Treibers werden geoeffnet ..."
-        Info "Dort 'Vorder- und Rueckseite' bzw. 'Duplex' waehlen und mit OK bestaetigen."
-        $antwort = $wiaDialog.ShowAcquisitionSettings($geraet)
-        if ($antwort) {
-            Info "Die Einstellungen des Treibers werden uebernommen."
-        } else {
-            Warn "Der Dialog wurde abgebrochen - es gelten die bisherigen Einstellungen."
+
+        # Die Automation kennt zwei Eigenschaftsdialoge - je nach Treiber
+        # steckt die Scanseite im einen oder im anderen. Beide werden
+        # nacheinander versucht, mit und ohne zweitem Parameter.
+        $wege = @(
+            @{ Was = 'Element'; Aufruf = { $wiaDialog.ShowItemProperties($script:Element, $false) } }
+            @{ Was = 'Element'; Aufruf = { $wiaDialog.ShowItemProperties($script:Element) } }
+            @{ Was = 'Geraet';  Aufruf = { $wiaDialog.ShowDeviceProperties($script:Geraet, $false) } }
+            @{ Was = 'Geraet';  Aufruf = { $wiaDialog.ShowDeviceProperties($script:Geraet) } }
+        )
+        foreach ($weg in $wege) {
+            try {
+                $ergebnis = & $weg.Aufruf
+                $dialogOffen = $true
+                if ($null -ne $ergebnis) {
+                    if ($weg.Was -eq 'Element') { $element = $ergebnis; $script:Element = $ergebnis }
+                    else                        { $geraet  = $ergebnis; $script:Geraet  = $ergebnis }
+                }
+                Info "Die Einstellungen des Treibers werden uebernommen."
+                break
+            } catch {
+                continue
+            }
         }
-        try { $element = $geraet.Items.Item(1) } catch { }
+        if (-not $dialogOffen) {
+            Warn "Dieser Treiber bietet der Automation keinen Einstellungsdialog an."
+        }
     } catch {
-        Warn "Der Treiber bietet keinen eigenen Einstellungsdialog an ($($_.Exception.Message.Trim()))."
+        Warn "Der Einstellungsdialog liess sich nicht oeffnen ($($_.Exception.Message.Trim()))."
+    }
+
+    if (-not $dialogOffen) {
+        Info ""
+        Info "Duplex laesst sich stattdessen im Scanprofil von Windows festlegen:"
+        Info "  1. Windows-Taste + R, dann eingeben:  control sticpl.cpl"
+        Info "  2. Scanner auswaehlen -> Scanprofile -> Bearbeiten"
+        Info "  3. Quelle: 'Einzug (beidseitiger Scan)' - steht das dort zur Auswahl,"
+        Info "     beherrscht der Treiber Duplex ueber WIA; fehlt es, kann er es nicht."
+        Info "Alternativ bleibt CaptureOnTouch von Canon."
     }
 }
 
@@ -979,6 +1010,12 @@ if ($hatEinzug) {
 if ($duplexWert -gt 0) {
     # von Hand vorgegeben: nur diesen Wert verwenden
     $einzugsWege = @(@{ Wert = $duplexWert; Text = "fest vorgegeben ($duplexWert)"; Duplex = (($duplexWert -band $HANDLE_DUPLEX) -ne 0) })
+}
+
+if ($dialog) {
+    # Was im Treiberdialog eingestellt wurde, darf nicht ueberschrieben werden.
+    Info "Die Einzugsart bleibt so, wie sie im Treiber eingestellt ist."
+    $einzugsWege = @()
 }
 
 $script:EinzugsWege = $einzugsWege
@@ -1084,6 +1121,7 @@ if ($anzahlElemente -gt 1) {
 $modusText = switch ($farbmodus) { 'farbe' { 'Farbe' } 'grau' { 'Graustufen' } 'sw' { 'Schwarzweiss' } }
 if ($einfach) { $modusText = 'Geraetevorgabe' }
 $seitenText = if ($duplex) { 'Duplex' } else { 'Einseitig' }
+if ($dialog) { $seitenText = 'Seiten laut Treiber' }
 $leerText = ''
 if ($geradeRichten) { $leerText += ', gerade richten' }
 if ($festDrehen -ne 0) { $leerText += ", um $festDrehen Grad drehen" }
@@ -1260,8 +1298,10 @@ try {
             Info "So geht es trotzdem beidseitig:"
             Info "  1. Scan.bat /dialog      Einstellungen des Treibers oeffnen,"
             Info "                           dort Duplex waehlen und mit OK bestaetigen"
-            Info "  2. Diagnose.bat /duplextest   zeigt, welche Schreibweisen er kennt"
-            Info "  3. ohne Haken bei Vorder-/Rueckseite scannt er wie gewohnt einseitig"
+            Info "  2. Windows-Scanprofil:   control sticpl.cpl -> Scanprofile ->"
+            Info "                           Quelle 'Einzug (beidseitiger Scan)'"
+            Info "  3. Diagnose.bat /duplextest   zeigt, welche Schreibweisen er kennt"
+            Info "  4. ohne Haken bei Vorder-/Rueckseite scannt er wie gewohnt einseitig"
         } else {
             Info "Moegliche Ursachen:"
             Info "  - das Geraet ist aus oder das USB-Kabel steckt nicht fest"

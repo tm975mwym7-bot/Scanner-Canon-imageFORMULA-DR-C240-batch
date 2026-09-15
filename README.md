@@ -380,7 +380,17 @@ Scan.bat /dialog
 
 öffnet den Einstellungsdialog des Scanner-Treibers. Dort *Scanseite* bzw.
 *Scanning Side* auf **Duplex** stellen, mit OK bestätigen — anschließend scannt
-das Programm mit genau diesen Einstellungen, ohne eigene Vorgaben. Im Fenster
+das Programm mit genau diesen Einstellungen und rührt die Einzugsart nicht an.
+
+Bietet der Treiber der Automation keinen Dialog an (auch das kommt vor), führt
+der Weg über das **Scanprofil von Windows**:
+
+1. Windows-Taste + R, dann `control sticpl.cpl`
+2. Scanner auswählen → *Scanprofile* → *Bearbeiten*
+3. Bei *Quelle* nachsehen: Steht dort **„Einzug (beidseitiger Scan)"**, kann
+   der Treiber Duplex über WIA — dann die Einstellung dort setzen. Fehlt der
+   Eintrag, kann dieser WIA-Treiber es nicht, und beidseitiges Scannen bleibt
+   CaptureOnTouch vorbehalten. Im Fenster
 führt der Knopf **Treiber …** neben der Scannerauswahl (Servicebereich) zum
 selben Dialog; viele Treiber merken sich die Wahl dauerhaft, dann genügt das
 einmalig bei der Einrichtung.
