@@ -330,8 +330,22 @@ scannt dann ohne eigene Vorgaben mit dem, was im Treiber eingestellt ist.
 
 **Fehler nur bei „Vorder- und Rückseite", einseitig geht es**
 
-Dann nimmt der WIA-Treiber die Duplex-Einstellung nicht an — kein Defekt,
-sondern eine Eigenheit vieler Treiber.
+Dafür gibt es zwei Ursachen, und beide behandelt das Programm inzwischen.
+
+**Erstens: das Bildformat.** Beim beidseitigen Scannen liefern manche Treiber
+— der von Canon gehört dazu — **Vorder- und Rückseite zusammen in einer
+einzigen Übertragung**. Das kann nur ein mehrseitenfähiges Format wie TIFF
+aufnehmen; fordert die Anwendung JPEG an, bricht der Treiber mit
+`0x8000FFFF` („unerwarteter Zustand") ab, nachdem er das Blatt bereits
+eingezogen hat. Genau deshalb steht im Scanprofil von Windows für beidseitige
+Scans standardmäßig **TIF**.
+
+Das Programm fordert bei eingeschaltetem Duplex daher von vornherein TIFF an
+und **zerlegt die gelieferte Datei anschließend wieder in einzelne Seiten**.
+Für einseitige Scans bleibt es bei JPEG — das ist sparsamer.
+
+**Zweitens: die Einstellung selbst** — manche WIA-Treiber nehmen sie nicht
+entgegen.
 
 Die Einzugsart gibt es in WIA nämlich **zweimal**: am Gerät *und* am
 Scan-Element. Microsoft schreibt dazu zwei Dinge, die den Unterschied machen:
@@ -388,9 +402,13 @@ der Weg über das **Scanprofil von Windows**:
 1. Windows-Taste + R, dann `control sticpl.cpl`
 2. Scanner auswählen → *Scanprofile* → *Bearbeiten*
 3. Bei *Quelle* nachsehen: Steht dort **„Einzug (beidseitiger Scan)"**, kann
-   der Treiber Duplex über WIA — dann die Einstellung dort setzen. Fehlt der
-   Eintrag, kann dieser WIA-Treiber es nicht, und beidseitiges Scannen bleibt
-   CaptureOnTouch vorbehalten. Im Fenster
+   der Treiber Duplex über WIA. Fehlt der Eintrag, kann dieser WIA-Treiber es
+   nicht, und beidseitiges Scannen bleibt CaptureOnTouch vorbehalten.
+
+Das Profil ist zugleich aufschlussreich: Es steht dort auf **TIF** — eben
+weil beidseitige Scans zwei Seiten je Blatt liefern. Die Einstellungen im
+Profil gelten allerdings nur für *Windows-Fax und -Scan*; jede andere
+Anwendung, auch diese hier, setzt sie selbst. Im Fenster
 führt der Knopf **Treiber …** neben der Scannerauswahl (Servicebereich) zum
 selben Dialog; viele Treiber merken sich die Wahl dauerhaft, dann genügt das
 einmalig bei der Einrichtung.

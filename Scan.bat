@@ -89,6 +89,7 @@ $HANDLE_FRONT_ONLY  = 32
 $FMT_JPEG = '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}'
 $FMT_PNG  = '{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}'
 $FMT_BMP  = '{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}'
+$FMT_TIFF = '{B96B3CB1-0728-11D3-9D7B-0000F81EF32E}'
 
 $ERR_PAPER_EMPTY = -2145320957   # 0x80210003
 $ERR_PAPER_JAM   = -2145320958   # 0x80210002
@@ -223,6 +224,7 @@ function Get-WiaFehlerText([int]$hr) {
         -2145320947 { return '  (der Treiber lehnt diese Einstellung ab)' }
         -2145320939 { return '  (Geraet offline)' }
         -2147467259 { return '  (schwerwiegender Fehler - der Treiber kommt mit der Anfrage nicht zurecht)' }
+        -2147418113 { return '  (unerwarteter Zustand im Treiber - meist liefert er mehr Seiten, als das Bildformat aufnehmen kann)' }
         -2147024809 { return '  (ungueltiger Wert)' }
         -2147024882 { return '  (zu wenig Speicher fuer das Bild)' }
         default     { return '' }
@@ -516,6 +518,52 @@ function Get-SeitenWerte([string]$pfad) {
     $ges = 0.0
     if ($gesamt -gt 0) { $ges = $dunkel / [double]$gesamt }
     return @($ges, $maxFeld)
+}
+
+# ---------------------------------------------------------------------------
+# Eine uebertragene Datei in Einzelseiten zerlegen
+#
+# Bei beidseitigem Scannen liefern manche Treiber - der von Canon gehoert
+# dazu - Vorder- und Rueckseite zusammen in EINER Datei. Das geht nur mit
+# einem mehrseitenfaehigen Format wie TIFF. Hier wird eine solche Datei
+# wieder in einzelne Seiten zerlegt.
+# ---------------------------------------------------------------------------
+function Teile-Mehrseitig([string]$pfad, [string]$ordner, [int]$nummer, [int]$qualitaet) {
+    $endung = [IO.Path]::GetExtension($pfad).ToLowerInvariant()
+    if ($endung -ne '.tif' -and $endung -ne '.tiff') { return @($pfad) }
+
+    Add-Type -AssemblyName System.Drawing | Out-Null
+    $bild = Get-BildAusDatei $pfad
+    try {
+        $anzahl = 1
+        try {
+            $dim = New-Object System.Drawing.Imaging.FrameDimension($bild.FrameDimensionsList[0])
+            $anzahl = [int]$bild.GetFrameCount($dim)
+        } catch { $anzahl = 1 }
+        if ($anzahl -le 1) { return @($pfad) }
+
+        $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+        $dateien = @()
+        for ($i = 0; $i -lt $anzahl; $i++) {
+            [void]$bild.SelectActiveFrame($dim, $i)
+            $ziel = [IO.Path]::Combine($ordner, ("Seite_{0:D4}_{1:D2}.jpg" -f $nummer, ($i + 1)))
+            $bmp = New-Object System.Drawing.Bitmap($bild.Width, $bild.Height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+            try {
+                $bmp.SetResolution($bild.HorizontalResolution, $bild.VerticalResolution)
+                $g = [System.Drawing.Graphics]::FromImage($bmp)
+                try {
+                    $g.Clear([System.Drawing.Color]::White)
+                    $g.DrawImage($bild, 0, 0, $bild.Width, $bild.Height)
+                } finally { $g.Dispose() }
+                $ep = New-Object System.Drawing.Imaging.EncoderParameters(1)
+                $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [int64]$qualitaet)
+                $bmp.Save($ziel, $codec, $ep)
+                $ep.Dispose()
+            } finally { $bmp.Dispose() }
+            $dateien += $ziel
+        }
+        return $dateien
+    } finally { $bild.Dispose() }
 }
 
 # ---------------------------------------------------------------------------
@@ -1143,7 +1191,12 @@ function KannFormat($liste, $guid) {
 # wird verlustfrei uebertragen, damit nicht zweimal komprimiert wird.
 $transferFormat = $FMT_BMP
 $transferEndung = '.bmp'
-if (($format -eq 'pdf' -or $format -eq 'jpg') -and $farbmodus -ne 'sw' -and (KannFormat $verfuegbareFormate $FMT_JPEG)) {
+if (($duplex -or $dialog) -and (KannFormat $verfuegbareFormate $FMT_TIFF)) {
+    # Beidseitig kommen Vorder- und Rueckseite oft zusammen in einer Datei -
+    # das kann nur ein mehrseitenfaehiges Format wie TIFF aufnehmen.
+    $transferFormat = $FMT_TIFF
+    $transferEndung = '.tif'
+} elseif (($format -eq 'pdf' -or $format -eq 'jpg') -and $farbmodus -ne 'sw' -and (KannFormat $verfuegbareFormate $FMT_JPEG)) {
     $transferFormat = $FMT_JPEG
     $transferEndung = '.jpg'
 } elseif (KannFormat $verfuegbareFormate $FMT_PNG) {
@@ -1187,7 +1240,8 @@ try {
     while ($true) {
         if ($maxSeiten -gt 0 -and $seitenNr -ge $maxSeiten) { break }
         $seitenNr++
-        Write-Host ("  Seite {0} wird gescannt ..." -f $seitenNr) -NoNewline
+        $wortBlatt = if ($duplex -or $dialog) { 'Blatt' } else { 'Seite' }
+        Write-Host ("  {0} {1} wird gescannt ..." -f $wortBlatt, $seitenNr) -NoNewline
 
         $bild = $null
         try {
@@ -1205,13 +1259,21 @@ try {
                     $istPapierfehler = ($hrErst -eq $ERR_PAPER_EMPTY -or $hrErst -eq $ERR_PAPER_JAM -or $hrErst -eq $ERR_OFFLINE)
                     # Beim ersten Anlauf heisst "kein Papier" wirklich kein Papier.
                     # Danach kann es auch an der geaenderten Einzugsart liegen.
-                    if ($seitenNr -ne 1 -or $rettung -ge 5) { throw }
+                    if ($seitenNr -ne 1 -or $rettung -ge 3) { throw }
                     if ($istPapierfehler -and $rettung -eq 0) { throw }
 
                     # Den echten Fehler zeigen - sonst raet man im Dunkeln.
                     Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
                     Warn ("Die Uebertragung schlug fehl: {0}" -f $textErst)
                     if ($hrErst -ne 0) { Info ("  Fehlernummer: 0x{0:X8}{1}" -f $hrErst, (Get-WiaFehlerText $hrErst)) }
+
+                    # Ist das Blatt beim Fehlversuch durchgelaufen, hilft kein
+                    # weiterer Versuch - dafuer fehlt schlicht die Vorlage.
+                    if ($istPapierfehler) {
+                        Warn "Das Blatt ist beim Fehlversuch durchgelaufen - der Einzug ist leer."
+                        Info "Bitte neu einlegen und erneut starten."
+                        throw
+                    }
 
                     # Liegt ueberhaupt noch Papier im Fach? Jeder weitere Versuch
                     # wuerde sonst nur ein weiteres Blatt durchziehen.
@@ -1248,6 +1310,12 @@ try {
                         continue
                     }
 
+                    if ($transferFormat -ne $FMT_TIFF -and (KannFormat $verfuegbareFormate $FMT_TIFF)) {
+                        Info "  Es wird mit mehrseitenfaehigem TIFF versucht ..."
+                        $transferFormat = $FMT_TIFF
+                        $transferEndung = '.tif'
+                        continue
+                    }
                     if ($transferFormat -ne $FMT_BMP) {
                         $transferFormat = $FMT_BMP
                         $transferEndung = '.bmp'
@@ -1278,8 +1346,20 @@ try {
         if (Test-Path -LiteralPath $datei) { Remove-Item -LiteralPath $datei -Force }
         $bild.SaveFile($datei)
         try { [Runtime.InteropServices.Marshal]::ReleaseComObject($bild) | Out-Null } catch { }
-        $rohSeiten += $datei
-        Write-Host " fertig"
+
+        # Kamen mehrere Seiten in einer Datei (beidseitig), werden sie getrennt
+        $teile = @($datei)
+        try {
+            $teile = @(Teile-Mehrseitig $datei $arbeitsOrdner $seitenNr $qualitaet)
+        } catch {
+            Warn "Die uebertragene Datei liess sich nicht zerlegen ($($_.Exception.Message.Trim()))."
+        }
+        $rohSeiten += $teile
+        if ($teile.Count -gt 1) {
+            Write-Host (" fertig ({0} Seiten)" -f $teile.Count)
+        } else {
+            Write-Host " fertig"
+        }
 
         if (-not $hatEinzug) { break }   # Flachbett: nur eine Seite
     }
