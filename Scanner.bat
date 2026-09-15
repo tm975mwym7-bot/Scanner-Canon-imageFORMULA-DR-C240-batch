@@ -153,6 +153,7 @@ function Get-Einstellungen {
         Scanner   = ''
         Scanweg   = 'auto'
         Gerade    = $false
+        Aufrecht  = $false
         Leerseiten = $false
         Kachel    = $true
         KachelX   = -1
@@ -169,6 +170,7 @@ function Get-Einstellungen {
             $e.Duplex  = [bool]$e.Duplex
             $e.Oeffnen = [bool]$e.Oeffnen
             $e.Gerade     = [bool]$e.Gerade
+            $e.Aufrecht   = [bool]$e.Aufrecht
             $e.Leerseiten = [bool]$e.Leerseiten
             $e.Scanweg    = "$($e.Scanweg)".ToLowerInvariant()
             if ($e.Scanweg -notin @('auto', 'naps2', 'wia')) { $e.Scanweg = 'auto' }
@@ -254,6 +256,7 @@ function New-ScanArgumente($e) {
     $teile += '/dpi'; $teile += [string][int]$e.Dpi
     if ($e.Duplex)     { $teile += '/duplex' }
     if ($e.Gerade)     { $teile += '/gerade' }
+    if ($e.Aufrecht)   { $teile += '/aufrecht' }
     if ($e.Leerseiten) { $teile += '/leerseiten' }
     # Scanweg: 'auto' laesst Scan.bat entscheiden (bei Duplex NAPS2, sonst Windows)
     switch ("$($e.Scanweg)".ToLowerInvariant()) {
@@ -446,11 +449,11 @@ Add-Type -AssemblyName System.Drawing
 $e = Get-Einstellungen
 
 $script:HoeheKunde   = 330
-$script:HoeheService = 778
+$script:HoeheService = 802
 try {
     # auf kleinen Bildschirmen kuerzen; der Servicebereich bekommt dann eine Bildlaufleiste
     $platz = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 70
-    if ($script:HoeheService -gt $platz) { $script:HoeheService = [Math]::Max(464, $platz) }
+    if ($script:HoeheService -gt $platz) { $script:HoeheService = [Math]::Max(488, $platz) }
 } catch { }
 
 $firmenBlau = [System.Drawing.Color]::FromArgb(43, 74, 155)
@@ -626,7 +629,7 @@ $form.Controls.Add($lblLinie2)
 # ===========================================================================
 $pnlService          = New-Object System.Windows.Forms.Panel
 $pnlService.Location = New-Object System.Drawing.Point(0, 296)
-$pnlService.Size     = New-Object System.Drawing.Size(620, 444)
+$pnlService.Size     = New-Object System.Drawing.Size(620, 468)
 $pnlService.Visible  = $false
 
 $lblService          = New-Object System.Windows.Forms.Label
@@ -762,18 +765,23 @@ $chkLeer.Text     = 'Leere Seiten weglassen'
 $chkLeer.Location = New-Object System.Drawing.Point(300, 280)
 $chkLeer.AutoSize = $true
 
+$chkAufrecht          = New-Object System.Windows.Forms.CheckBox
+$chkAufrecht.Text     = 'Seiten auf dem Kopf selbst erkennen und drehen'
+$chkAufrecht.Location = New-Object System.Drawing.Point(18, 304)
+$chkAufrecht.AutoSize = $true
+
 $chkKachel          = New-Object System.Windows.Forms.CheckBox
 $chkKachel.Text     = 'Kleines Fenster unten rechts anzeigen (immer im Vordergrund)'
-$chkKachel.Location = New-Object System.Drawing.Point(18, 304)
+$chkKachel.Location = New-Object System.Drawing.Point(18, 328)
 $chkKachel.AutoSize = $true
 
 $lblProt          = New-Object System.Windows.Forms.Label
 $lblProt.Text     = 'Protokoll:'
-$lblProt.Location = New-Object System.Drawing.Point(18, 330)
+$lblProt.Location = New-Object System.Drawing.Point(18, 354)
 $lblProt.AutoSize = $true
 
 $txtLog            = New-Object System.Windows.Forms.TextBox
-$txtLog.Location   = New-Object System.Drawing.Point(18, 350)
+$txtLog.Location   = New-Object System.Drawing.Point(18, 374)
 $txtLog.Size       = New-Object System.Drawing.Size(584, 52)
 $txtLog.Multiline  = $true
 $txtLog.ReadOnly   = $true
@@ -783,25 +791,25 @@ $txtLog.Font       = New-Object System.Drawing.Font('Consolas', 9)
 
 $btnLink          = New-Object System.Windows.Forms.Button
 $btnLink.Text     = 'Verknüpfung'
-$btnLink.Location = New-Object System.Drawing.Point(18, 410)
+$btnLink.Location = New-Object System.Drawing.Point(18, 434)
 $btnLink.Size     = New-Object System.Drawing.Size(150, 26)
 
 $btnFrei          = New-Object System.Windows.Forms.Button
 $btnFrei.Text     = 'Scanner freigeben'
-$btnFrei.Location = New-Object System.Drawing.Point(176, 410)
+$btnFrei.Location = New-Object System.Drawing.Point(176, 434)
 $btnFrei.Size     = New-Object System.Drawing.Size(130, 26)
 
 $btnKennwort          = New-Object System.Windows.Forms.Button
 $btnKennwort.Text     = 'Kennwort ändern'
-$btnKennwort.Location = New-Object System.Drawing.Point(314, 410)
+$btnKennwort.Location = New-Object System.Drawing.Point(314, 434)
 $btnKennwort.Size     = New-Object System.Drawing.Size(140, 26)
 
 $btnServiceZu          = New-Object System.Windows.Forms.Button
 $btnServiceZu.Text     = 'Service schließen'
-$btnServiceZu.Location = New-Object System.Drawing.Point(462, 410)
+$btnServiceZu.Location = New-Object System.Drawing.Point(462, 434)
 $btnServiceZu.Size     = New-Object System.Drawing.Size(140, 26)
 
-$pnlService.Controls.AddRange(@($lblService, $grpGeraet, $grpAblage, $chkGerade, $chkLeer, $chkKachel,
+$pnlService.Controls.AddRange(@($lblService, $grpGeraet, $grpAblage, $chkGerade, $chkLeer, $chkAufrecht, $chkKachel,
                                 $lblProt, $txtLog, $btnLink, $btnFrei, $btnKennwort, $btnServiceZu))
 $form.Controls.Add($pnlService)
 
@@ -988,6 +996,7 @@ function Lies-Oberflaeche {
         Dpi     = $dpi
         Duplex  = $chkDuplex.Checked
         Gerade     = $chkGerade.Checked
+        Aufrecht   = $chkAufrecht.Checked
         Leerseiten = $chkLeer.Checked
         Name    = $txtName.Text
         Oeffnen = $chkOeffnen.Checked
@@ -1095,11 +1104,11 @@ function Zeige-Service([bool]$sichtbar) {
         $form.ClientSize = New-Object System.Drawing.Size(620, $script:HoeheService)
         # auf niedrigen Bildschirmen bekommt der Servicebereich eine Bildlaufleiste
         $platz = $script:HoeheService - $pnlService.Top - 28
-        if ($platz -lt 444) {
+        if ($platz -lt 468) {
             $pnlService.Height     = $platz
             $pnlService.AutoScroll = $true
         } else {
-            $pnlService.Height     = 444
+            $pnlService.Height     = 468
             $pnlService.AutoScroll = $false
         }
     } else {
@@ -1612,6 +1621,7 @@ $txtZiel.Text       = $e.Ziel
 $txtName.Text       = $e.Name
 $chkDuplex.Checked  = [bool]$e.Duplex
 $chkGerade.Checked  = [bool]$e.Gerade
+$chkAufrecht.Checked = [bool]$e.Aufrecht
 $chkLeer.Checked    = [bool]$e.Leerseiten
 $chkOeffnen.Checked = [bool]$e.Oeffnen
 $radPdf.Checked     = ($e.Format -eq 'pdf')

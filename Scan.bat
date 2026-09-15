@@ -140,6 +140,8 @@ SCANWEG
   /duplexwert <n>   Duplex-Schreibweise fest vorgeben (1, 4 oder 5)
   /gerade           schraeg eingezogene Seiten automatisch gerade richten
   /drehen <Grad>    alle Seiten fest drehen: 0, 90, 180 oder 270
+  /aufrecht         auf dem Kopf stehende Seiten selbst erkennen und drehen
+                    (bleibt die Seite unklar, wird sie nicht angetastet)
   /leerseiten       leere Seiten (z.B. unbedruckte Rueckseiten) weglassen
   /leerwert <Zahl>  Empfindlichkeit dafuer in Promille (Standard: 1.5)
   /name <Text>      Namensbestandteil der Zieldatei (Standard: Scan)
@@ -477,11 +479,15 @@ $script:LeerBlockGrenze   = 0.004   # 0,4 % dunkle Punkte in einem Feld = Inhalt
 $script:LeerFelder        = 12      # Raster fuer die Feldpruefung
 $script:LeerRand          = 0.07    # Rand ausserhalb der Pruefung (Lochung, Schatten)
 $script:LeerSchwelle      = 200     # dunkler als das gilt als Inhalt
+$script:KopfMindestZeilen = 4      # so viele auswertbare Textzeilen muessen es sein
+$script:KopfMehrheit      = 0.85   # so einig muessen die Zeilen sein, damit gedreht wird
 
 function Initialisiere-LeerZaehler {
     if ($script:LeerZaehlerBereit) { return $true }
     try {
         Add-Type -TypeDefinition @'
+using System;
+
 public static class SeitenPruefer
 {
     // Liefert { Anteil dunkler Punkte insgesamt, groesster Anteil in einem Feld }
@@ -519,6 +525,78 @@ public static class SeitenPruefer
         }
         double ges = gesamt == 0 ? 0.0 : (double)dunkel / gesamt;
         return new double[] { ges, maxFeld };
+    }
+
+    // --- Steht die Seite auf dem Kopf? --------------------------------------
+    // In lateinischer Schrift ragt viel mehr Schrift ueber die Mittellaenge
+    // nach OBEN (b d f h k l t und alle Grossbuchstaben) als nach unten
+    // (g j p q y). Je Textzeile wird der dichte Kern - die Mittellaenge -
+    // bestimmt und die Schwaerze darueber mit der darunter verglichen. Liegt
+    // mehr darueber, steht die Zeile richtig herum.
+    // Wichtig ist eine niedrige Bandschwelle: Ober- und Unterlaengen sind
+    // duenn, und genau sie tragen die Aussage.
+    // Rueckgabe: { Stimmen fuer aufrecht, Stimmen fuer Kopfstand, Stimmen gesamt }
+    public static double[] Ausrichtung(byte[] p, int stride, int b, int h, int schwelle)
+    {
+        const double BAND_SCHWELLE = 0.015;  // ab wann eine Bildzeile zur Textzeile gehoert
+        const double KERN_ANTEIL   = 0.50;   // ab wann eine Bildzeile zum dichten Kern gehoert
+        const double STIMM_GRENZE  = 0.10;   // wie klar eine Zeile sein muss, um zu zaehlen
+
+        long[] zeile = new long[h];
+        long hoechst = 0;
+        for (int y = 0; y < h; y++)
+        {
+            int z = y * stride;
+            long n = 0;
+            for (int x = 0; x < b; x++) { if (p[z + x * 3] < schwelle) { n++; } }
+            zeile[y] = n;
+            if (n > hoechst) { hoechst = n; }
+        }
+        if (hoechst < 3) { return new double[] { 0.0, 0.0, 0.0 }; }
+
+        long grenze = (long)(hoechst * BAND_SCHWELLE); if (grenze < 1) { grenze = 1; }
+        int maxHoehe = h / 5; if (maxHoehe < 10) { maxHoehe = 10; }
+
+        int aufrecht = 0, kopf = 0;
+        int y0 = 0;
+        while (y0 < h)
+        {
+            if (zeile[y0] <= grenze) { y0++; continue; }
+            int y1 = y0;
+            while (y1 + 1 < h && zeile[y1 + 1] > grenze) { y1++; }
+            int hoehe = y1 - y0 + 1;
+
+            if (hoehe >= 8 && hoehe <= maxHoehe)
+            {
+                long summe = 0, best = -1; int spitze = y0;
+                for (int y = y0; y <= y1; y++)
+                {
+                    summe += zeile[y];
+                    if (zeile[y] > best) { best = zeile[y]; spitze = y; }
+                }
+                // Eine einzelne sehr dichte Bildzeile ist ein Strich (Tabelle,
+                // Unterstreichung) und keine Schrift - so etwas nicht werten.
+                if (summe > 0 && (double)best / summe < 0.5)
+                {
+                    double kernGrenze = best * KERN_ANTEIL;
+                    int k0 = spitze; while (k0 - 1 >= y0 && zeile[k0 - 1] >= kernGrenze) { k0--; }
+                    int k1 = spitze; while (k1 + 1 <= y1 && zeile[k1 + 1] >= kernGrenze) { k1++; }
+
+                    long oben = 0, unten = 0;
+                    for (int y = y0; y < k0; y++)     { oben  += zeile[y]; }
+                    for (int y = k1 + 1; y <= y1; y++) { unten += zeile[y]; }
+                    long beide = oben + unten;
+                    if (beide > 0)
+                    {
+                        double anteilUnten = (double)unten / beide;
+                        if      (anteilUnten > 0.5 + STIMM_GRENZE) { kopf++; }
+                        else if (anteilUnten < 0.5 - STIMM_GRENZE) { aufrecht++; }
+                    }
+                }
+            }
+            y0 = y1 + 1;
+        }
+        return new double[] { (double)aufrecht, (double)kopf, (double)(aufrecht + kopf) };
     }
 
     // --- Schraeglauf messen -------------------------------------------------
@@ -722,6 +800,26 @@ function Get-Schraeglauf([string]$pfad) {
     return [SeitenPruefer]::BesterWinkel($v.Puffer, $v.Stride, $v.Breite, $v.Hoehe, 180, 8.0, 0.5)
 }
 
+# Prueft, ob eine Seite auf dem Kopf steht.
+# Rueckgabe: 180 (Seite steht kopf), 0 (Seite steht richtig) oder
+# $null, wenn sich das nicht sicher genug sagen laesst.
+function Get-Kopfstand([string]$pfad) {
+    if (-not (Initialisiere-LeerZaehler)) { return $null }   # ohne Hilfsklasse zu langsam
+    # 1200 Punkte Breite: schmaler loesen sich Ober- und Unterlaengen nicht
+    # mehr auf, und genau an denen haengt die Erkennung.
+    $v = Get-Vorschau $pfad 1200
+    $w = [SeitenPruefer]::Ausrichtung($v.Puffer, $v.Stride, $v.Breite, $v.Hoehe, 180)
+    $aufrecht = [int]$w[0]
+    $kopf     = [int]$w[1]
+    $stimmen  = [int]$w[2]
+
+    # Zu wenig auswertbarer Text - lieber nichts drehen als falsch drehen
+    if ($stimmen -lt $script:KopfMindestZeilen) { return $null }
+    if ($kopf     -ge $script:KopfMehrheit * $stimmen) { return 180 }
+    if ($aufrecht -ge $script:KopfMehrheit * $stimmen) { return 0 }
+    return $null                                  # uneindeutig: unveraendert lassen
+}
+
 # Dreht eine Seite und schreibt sie zurueck. Vielfache von 90 Grad werden
 # verlustfrei gedreht, dazwischen wird mit weissem Hintergrund gerechnet.
 function Drehe-Seite([string]$pfad, [double]$winkel, [int]$qualitaet) {
@@ -915,6 +1013,7 @@ $dialog     = $false
 $einfach    = $false
 $duplexWert = 0            # 0 = automatisch probieren
 $geradeRichten = $false
+$aufrechtDrehen = $false
 $festDrehen = 0
 $leerseiten = $false
 $leerWert   = 1.5          # Promille dunkler Bildpunkte
@@ -965,6 +1064,7 @@ try {
             'duplexwert' { $duplexWert = AlsZahl (Naechstes ([ref]$i) 'duplexwert') 'duplexwert' }
             'gerade'    { $geradeRichten = $true }
             'drehen'    { $festDrehen = AlsZahl (Naechstes ([ref]$i) 'drehen') 'drehen' }
+            'aufrecht'  { $aufrechtDrehen = $true }
             'leerseiten' { $leerseiten = $true }
             'leerwert'  {
                 $roh = Naechstes ([ref]$i) 'leerwert'
@@ -1765,7 +1865,7 @@ if ($rohSeiten.Count -eq 0) {
 # ---------------------------------------------------------------------------
 # Seiten ausrichten (feste Drehung und Schraeglauf)
 # ---------------------------------------------------------------------------
-if (($geradeRichten -or $festDrehen -ne 0) -and $rohSeiten.Count -gt 0) {
+if (($geradeRichten -or $aufrechtDrehen -or $festDrehen -ne 0) -and $rohSeiten.Count -gt 0) {
     Info ""
     Info "Seiten werden ausgerichtet ..."
     $nummer = 0
@@ -1774,6 +1874,15 @@ if (($geradeRichten -or $festDrehen -ne 0) -and $rohSeiten.Count -gt 0) {
         try {
             if ($festDrehen -ne 0) {
                 Drehe-Seite $seite $festDrehen $qualitaet
+            }
+            if ($aufrechtDrehen) {
+                $kopfstand = Get-Kopfstand $seite
+                if ($null -eq $kopfstand) {
+                    Info ("  Seite {0}: Ausrichtung nicht eindeutig - bleibt, wie sie ist" -f $nummer)
+                } elseif ($kopfstand -eq 180) {
+                    Drehe-Seite $seite 180 $qualitaet
+                    Info ("  Seite {0}: stand auf dem Kopf - um 180 Grad gedreht" -f $nummer)
+                }
             }
             if ($geradeRichten) {
                 $winkel = [double](Get-Schraeglauf $seite)

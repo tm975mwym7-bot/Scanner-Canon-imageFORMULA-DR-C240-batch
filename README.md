@@ -101,7 +101,7 @@ Fenster nach unten auf und zeigt:
 |---|---|
 | Gerät und Qualität | Scannerauswahl, *Suchen*, Farbmodus, Auflösung, **Scanweg** |
 | Ablage | **Zielordner**, Dateiname, Namensvorschau, „Ergebnis öffnen" |
-| Nachbearbeitung | schräge Seiten gerade richten, leere Seiten weglassen |
+| Nachbearbeitung | schräge Seiten gerade richten, Seiten auf dem Kopf drehen, leere Seiten weglassen |
 | Anzeige | Kachel unten rechts ein- oder ausschalten |
 | Protokoll | vollständige Ausgabe des letzten Scans |
 | Schaltflächen | Verknüpfung auf dem Desktop, Kennwort ändern, Service schließen |
@@ -143,7 +143,7 @@ im Servicebereich.
 ## Wo die Einstellungen liegen
 
 Zielordner, Format, Farbe, Auflösung, Duplex, Dateiname, Scannerauswahl,
-Scanweg sowie Sichtbarkeit und Position der Kachel werden gespeichert — bevorzugt als `einstellungen.json` **neben `Scanner.bat`**.
+Scanweg, Nachbearbeitung sowie Sichtbarkeit und Position der Kachel werden gespeichert — bevorzugt als `einstellungen.json` **neben `Scanner.bat`**.
 Damit gilt Ihre Einrichtung für **jeden Benutzer des Rechners**. Ist der
 Programmordner schreibgeschützt, weicht das Programm auf
 `%APPDATA%\Scan-DR-C240\einstellungen.json` aus (dann gilt sie nur für den
@@ -228,6 +228,7 @@ Scan.bat [Optionen]
 | `/duplexwert <n>` | Duplex-Schreibweise fest vorgeben (`1`, `4` oder `5`) |
 | `/gerade` | schräg eingezogene Seiten automatisch gerade richten |
 | `/drehen <Grad>` | alle Seiten fest drehen: `0`, `90`, `180` oder `270` |
+| `/aufrecht` | auf dem Kopf stehende Seiten selbst erkennen und drehen |
 | `/leerseiten` | leere Seiten (z. B. unbedruckte Rückseiten) weglassen |
 | `/leerwert <Zahl>` | Empfindlichkeit dafür in Promille (Standard: `1.5`) |
 | `/name <Text>` | Namensbestandteil der Zieldatei |
@@ -313,6 +314,39 @@ Bildpunkte nicht.
 > Zuverlässig geht das nur mit Texterkennung (OCR). Wenn Vorlagen systematisch
 > falsch herum eingezogen werden, hilft `/drehen 90|180|270`; die
 > OCR-gestützte Ausrichtung bringt Canon CaptureOnTouch mit.
+
+## Seiten auf dem Kopf
+
+Wird ein Blatt verkehrt herum in den Einzug gelegt, steht die Seite im
+Ergebnis auf dem Kopf. Der Haken **„Seiten auf dem Kopf selbst erkennen und
+drehen"** im Servicebereich (Kommandozeile: `/aufrecht`) fängt das ab. Im
+Auslieferungszustand ist er **aus**.
+
+Erkannt wird das an der Schrift selbst: In lateinischer Schrift ragt weit mehr
+über die Mittellänge nach **oben** (alle Großbuchstaben sowie `b d f h k l t`)
+als nach unten (`g j p q y`). Je Textzeile wird der dichte Kern — die
+Mittellänge — bestimmt und die Schwärze darüber mit der darunter verglichen.
+Sind sich mindestens vier Textzeilen zu **85 %** einig, wird die Seite um 180°
+gedreht.
+
+**Im Zweifel bleibt die Seite unangetastet.** Das ist Absicht: Eine falsch
+gedrehte Seite ist schlimmer als eine, die man von Hand dreht. Im Protokoll
+steht für jede Seite, was entschieden wurde.
+
+Gemessen an 22 Testseiten (Brief, Rechnung, Tabelle in Serifen-, serifenloser
+und Schreibmaschinenschrift von 30 bis 72 Punkt, jeweils aufrecht und um 180°
+gedreht, dazu Foto, leere Seite, reine Tabelle und Seite mit zwei Wörtern):
+
+| Ergebnis | Seiten |
+|---|---|
+| richtig erkannt | 16 |
+| keine Entscheidung (Seite bleibt, wie sie ist) | 6 |
+| **falsch gedreht** | **0** |
+
+Keine Entscheidung fällt vor allem bei **Großbuchstaben-Text** — dort gibt es
+weder Ober- noch Unterlängen, also auch kein Merkmal. Ebenso bei Fotos, leeren
+Seiten und reinen Tabellen ohne Fließtext. Für solche Vorlagen bleibt die feste
+Drehung `/drehen 180`.
 
 ## Voraussetzungen
 
@@ -633,9 +667,12 @@ sich abbrechen. Die Scan-Logik gibt es also nur einmal.
   Pixel Kantenlänge.
 * Die Desktop-Verknüpfung entsteht über `WScript.Shell` mit Fensterstil
   „minimiert".
-* Leerseitenprüfung und Schräglaufmessung rechnen in einer kleinen, zur
-  Laufzeit übersetzten C#-Klasse (Rückfallweg in PowerShell, falls das
-  Übersetzen scheitert).
+* Leerseitenprüfung, Schräglaufmessung und Ausrichtungserkennung rechnen in
+  einer kleinen, zur Laufzeit übersetzten C#-Klasse (Rückfallweg in
+  PowerShell, falls das Übersetzen scheitert).
+* Die Ausrichtungserkennung arbeitet auf einer Vorschau von 1200 Punkten
+  Breite — schmaler lösen sich Ober- und Unterlängen nicht mehr auf, und
+  genau an denen hängt die Erkennung.
 * Jedes erzeugte PDF trägt die Dokumentangaben `/Producer`, `/Author` und
   `/Subject` mit dem Copyright der IDO GmbH sowie Erstellungsdatum und
   Zeitzone.
