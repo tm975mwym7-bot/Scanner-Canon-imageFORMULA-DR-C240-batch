@@ -13,6 +13,8 @@ rem
 rem  Aufruf:  Diagnose.bat            nur pruefen
 rem           Diagnose.bat /scan      zusaetzlich eine Testseite einziehen
 rem           Diagnose.bat /freigeben Programme beenden, die den Scanner belegen
+rem           Diagnose.bat /duplextest probiert aus, welche Duplex-Einstellung
+rem                                    dieser Treiber annimmt (Blatt einlegen!)
 rem ===========================================================================
 
 setlocal enableextensions
@@ -377,6 +379,72 @@ if ($env:DIAG_ARGS -match '/scan') {
 }
 
 # ---------------------------------------------------------------------------
+if ($env:DIAG_ARGS -match '/duplextest') {
+    Titel '9. Duplex-Test'
+    if ($wiaGeraete.Count -eq 0) {
+        Punkt 'uebersprungen - kein Scanner gefunden.'
+    } else {
+        Punkt 'Fuer jeden Versuch wird ein Blatt eingezogen. Bitte genug Blaetter einlegen.'
+        Punkt ''
+        $varianten = @(
+            @{ Wert = 5; Text = 'Einzug + Duplex (Wert 5)' }
+            @{ Wert = 4; Text = 'nur Duplex (Wert 4)' }
+            @{ Wert = 1; Text = 'Einzug einseitig (Wert 1)' }
+        )
+        $geht = @()
+        foreach ($v in $varianten) {
+            try {
+                $g = $wiaGeraete[0].Connect()
+                $gesetzt = $false
+                foreach ($prop in $g.Properties) {
+                    if ($prop.PropertyID -eq 3088) {
+                        try { $prop.Value = $v.Wert; $gesetzt = $true } catch { }
+                    }
+                }
+                if (-not $gesetzt) {
+                    Warnung ("{0}: laesst sich nicht einstellen" -f $v.Text)
+                    continue
+                }
+                $it = $g.Items.Item(1)
+                $bild = $it.Transfer('{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}')
+                $tmp = [IO.Path]::Combine([IO.Path]::GetTempPath(), ("duplextest_{0}.jpg" -f $v.Wert))
+                if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+                $bild.SaveFile($tmp)
+                Gut ("{0}: funktioniert" -f $v.Text)
+                $geht += $v
+                Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            } catch {
+                $hr3 = 0
+                $ex3 = $_.Exception
+                while ($null -ne $ex3) {
+                    if ($ex3 -is [System.Runtime.InteropServices.COMException]) { $hr3 = $ex3.HResult; break }
+                    $ex3 = $ex3.InnerException
+                }
+                if ($hr3 -eq -2145320957) {
+                    Warnung ("{0}: kein Papier mehr - bitte Blaetter nachlegen und erneut testen" -f $v.Text)
+                } else {
+                    Schlecht ("{0}: schlaegt fehl ({1}{2})" -f $v.Text, $_.Exception.Message.Trim(),
+                              $(if ($hr3 -ne 0) { ', 0x{0:X8}' -f $hr3 } else { '' }))
+                }
+            }
+        }
+        Punkt ''
+        if ($geht.Count -eq 0) {
+            Schlecht 'Keine Einstellung wurde angenommen.'
+        } else {
+            $besteDuplex = $geht | Where-Object { $_.Wert -ne 1 } | Select-Object -First 1
+            if ($besteDuplex) {
+                Gut ("Beidseitig geht mit: {0}" -f $besteDuplex.Text)
+                Punkt ("Fest einstellen mit:  Scan.bat /duplex /duplexwert {0}" -f $besteDuplex.Wert)
+            } else {
+                Warnung 'Nur einseitig moeglich - dieser Treiber kann Duplex ueber WIA nicht.'
+                Punkt 'Beidseitig bleibt ueber Canon CaptureOnTouch oder die Treibereinstellung moeglich.'
+            }
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 Titel 'Bewertung'
 if (-not $befunde.WiaDienst) {
     Schlecht 'Der Dienst der Windows-Bilderfassung laeuft nicht.'
@@ -424,7 +492,8 @@ else {
 
 Zeile ''
 Zeile 'Hinweis: "Diagnose.bat /scan" zieht zusaetzlich eine Testseite ein,'
-Zeile '         "Diagnose.bat /freigeben" beendet belegende Programme.'
+Zeile '         "Diagnose.bat /freigeben" beendet belegende Programme,'
+Zeile '         "Diagnose.bat /duplextest" prueft die Duplex-Einstellungen.'
 
 # ---------------------------------------------------------------------------
 $berichtOrdner = [Environment]::GetFolderPath('Desktop')

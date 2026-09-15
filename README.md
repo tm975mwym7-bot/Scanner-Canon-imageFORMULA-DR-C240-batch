@@ -199,6 +199,7 @@ Scan.bat [Optionen]
 | `/dpi <Zahl>` | Auflösung, z. B. `150`, `200`, `300`, `400`, `600` |
 | `/duplex` | Vorder- und Rückseite scannen |
 | `/einfach` | ohne eigene Geräteeinstellungen scannen (bei Treiberfehlern) |
+| `/duplexwert <n>` | Duplex-Schreibweise fest vorgeben (`1`, `4` oder `5`) |
 | `/gerade` | schräg eingezogene Seiten automatisch gerade richten |
 | `/drehen <Grad>` | alle Seiten fest drehen: `0`, `90`, `180` oder `270` |
 | `/leerseiten` | leere Seiten (z. B. unbedruckte Rückseiten) weglassen |
@@ -326,6 +327,35 @@ Scan.bat /einfach
 
 scannt dann ohne eigene Vorgaben mit dem, was im Treiber eingestellt ist.
 
+**Fehler nur bei „Vorder- und Rückseite", einseitig geht es**
+Dann lehnt der WIA-Treiber die Duplex-Einstellung ab — kein Defekt, sondern
+eine Eigenheit mancher Treiber. Es gibt zwei Schreibweisen dafür
+(*Einzug + Duplex* = 5 und *nur Duplex* = 4), und nicht jeder Treiber nimmt
+dieselbe an.
+
+Das Programm regelt das inzwischen selbst: Scheitert die erste Seite, stellt es
+auf die zweite Schreibweise um, und erst wenn auch die abgelehnt wird, scannt es
+einseitig weiter — mit einem Hinweis, statt den Vorgang abzubrechen. Sie
+bekommen also in jedem Fall Ihre Scans.
+
+Welche Schreibweise Ihr Gerät annimmt, zeigt (Blätter einlegen, es wird je
+Versuch eines eingezogen):
+
+```
+Diagnose.bat /duplextest
+```
+
+Meldet der Test eine funktionierende Variante, lässt sie sich fest einstellen,
+dann entfallen die Fehlversuche:
+
+```
+Scan.bat /duplex /duplexwert 4
+```
+
+Nimmt der Treiber gar keine an, bleibt beidseitiges Scannen über die
+Canon-Treibereinstellung oder CaptureOnTouch möglich — über WIA geht es bei
+diesem Gerät dann nicht.
+
 **„Der Scanvorgang ist fehlgeschlagen“ / Scanner reagiert nicht**
 Eine andere Anwendung belegt das Gerät (siehe oben), oder das Gerät hängt:
 aus- und einschalten, USB-Kabel direkt am Rechner (kein Hub).
@@ -381,6 +411,7 @@ Bericht landet als Textdatei auf dem Desktop und lässt sich weitergeben.
 | `Diagnose.bat` | nur prüfen |
 | `Diagnose.bat /scan` | zusätzlich eine Testseite einziehen |
 | `Diagnose.bat /freigeben` | Programme beenden, die den Scanner belegen |
+| `Diagnose.bat /duplextest` | probiert aus, welche Duplex-Einstellung der Treiber annimmt |
 
 ### Rückgabewerte
 

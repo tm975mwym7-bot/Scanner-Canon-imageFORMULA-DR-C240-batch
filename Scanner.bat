@@ -1206,8 +1206,10 @@ $timer.Add_Tick({
         0 {
             $anzahl = ''
             if ($script:LetzterLog -match '(?m)^Fertig:\s*(\d+)\s') { $anzahl = $matches[1] }
-            if ($anzahl) { Setze-Status "Fertig - $anzahl Seite(n) gescannt und gespeichert." }
-            else         { Setze-Status 'Fertig.' }
+            $zusatz = ''
+            if ($script:LetzterLog -match 'einseitig gescannt') { $zusatz = ' (einseitig - Duplex lehnt der Treiber ab)' }
+            if ($anzahl) { Setze-Status "Fertig - $anzahl Seite(n) gescannt und gespeichert.$zusatz" }
+            else         { Setze-Status "Fertig.$zusatz" }
         }
         2 { Setze-Status 'Fehlerhafte Einstellung - bitte den Service verständigen.' }
         3 { Setze-Status 'Kein Scanner gefunden - Gerät einschalten und Kabel prüfen.'; Biete-Freigabe }
