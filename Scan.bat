@@ -122,6 +122,7 @@ FARBE
 WEITERE OPTIONEN
   /dpi <Zahl>       Aufloesung, z.B. 150, 200, 300, 400, 600 (Standard: 300)
   /duplex           Vorder- und Rueckseite scannen
+  /einfach          ohne eigene Geraeteeinstellungen scannen (bei Treiberfehlern)
   /gerade           schraeg eingezogene Seiten automatisch gerade richten
   /drehen <Grad>    alle Seiten fest drehen: 0, 90, 180 oder 270
   /leerseiten       leere Seiten (z.B. unbedruckte Rueckseiten) weglassen
@@ -146,6 +147,33 @@ HERAUSGEBER
   IDO GmbH - Anderslebener Str. 40 - 39387 Oschersleben
   (c) 2026 IDO GmbH - alle Rechte vorbehalten
 '@ | Write-Host
+}
+
+# ---------------------------------------------------------------------------
+# Programme, die den Scanner belegen und dadurch Fehler ausloesen koennen
+# ---------------------------------------------------------------------------
+function Get-BelegendeProgramme {
+    $muster = @('CaptureOnTouch', 'CaptureOnTouchLite', 'COTLite', 'CNMCOT', 'CNQL240',
+                'ScanButtonMonitor', 'CNMScanButton', 'wiaacmgr', 'WFS', 'WindowsScan',
+                'NAPS2', 'ScanGear', 'PaperStream', 'ScanSnap')
+    $gefunden = @()
+    try {
+        foreach ($prozess in (Get-Process -ErrorAction SilentlyContinue)) {
+            if ($muster -contains $prozess.ProcessName) { $gefunden += $prozess.ProcessName }
+        }
+    } catch { }
+    return ($gefunden | Select-Object -Unique)
+}
+
+# Hinweis ausgeben, wenn ein solches Programm laeuft
+function Zeige-Belegung {
+    $belegt = @(Get-BelegendeProgramme)
+    if ($belegt.Count -gt 0) {
+        Warn ("Diese Programme greifen selbst auf den Scanner zu: " + ($belegt -join ', '))
+        Info "Bitte beenden - sie belegen das Geraet. 'Diagnose.bat /freigeben' erledigt das."
+        return $true
+    }
+    return $false
 }
 
 # ---------------------------------------------------------------------------
@@ -658,6 +686,7 @@ $zielOrdner = $null
 $basisName  = 'Scan'
 $maxSeiten  = 0
 $qualitaet  = 80
+$einfach    = $false
 $geradeRichten = $false
 $festDrehen = 0
 $leerseiten = $false
@@ -698,6 +727,7 @@ try {
             'graustufen'{ $farbmodus = 'grau' }
             'sw'        { $farbmodus = 'sw' }
             'duplex'    { $duplex = $true }
+            'einfach'   { $einfach = $true }
             'gerade'    { $geradeRichten = $true }
             'drehen'    { $festDrehen = AlsZahl (Naechstes ([ref]$i) 'drehen') 'drehen' }
             'leerseiten' { $leerseiten = $true }
@@ -823,7 +853,14 @@ Info "Scanner: $($auswahl.Name)"
 try {
     $geraet = $auswahl.Info.Connect()
 } catch {
-    Fehler "Die Verbindung zum Scanner ist fehlgeschlagen: $($_.Exception.Message)"
+    $meldung = $_.Exception.Message.Trim()
+    $hr = Get-HResult $_.Exception
+    Fehler "Die Verbindung zum Scanner ist fehlgeschlagen: $meldung"
+    if ($hr -ne 0) { Info ("Fehlernummer: 0x{0:X8}" -f $hr) }
+    if (-not (Zeige-Belegung)) {
+        Info "Geraet aus- und wieder einschalten, USB-Kabel direkt am Rechner anschliessen."
+        Info "Mehr Hinweise liefert Diagnose.bat"
+    }
     exit 3
 }
 
@@ -868,6 +905,14 @@ switch ($farbmodus) {
     'sw'    { $datentyp = 0; $tiefe = 1;  $absicht = 4 }
 }
 
+if ($einfach) {
+    # Manche Treiber stolpern ueber gesetzte Eigenschaften. Im einfachen Modus
+    # bleibt alles so, wie es der Treiber selbst vorgibt.
+    Warn "Einfacher Modus: Farbe, Aufloesung und Scanbereich bleiben beim Geraet."
+    $dpi = Get-WiaWert $element.Properties $WIA_IPS_XRES
+    if (-not $dpi) { $dpi = 300 }
+} else {
+
 Set-WiaWert $element.Properties $WIA_IPS_CUR_INTENT $absicht | Out-Null
 if (-not (Set-WiaWert $element.Properties $WIA_IPA_DATATYPE $datentyp)) {
     Warn "Der Farbmodus konnte nicht gesetzt werden - es gilt die Geraeteeinstellung."
@@ -903,7 +948,10 @@ if (-not $dpiGesetzt) {
     }
 }
 
+}   # Ende des Zweigs ohne /einfach
+
 $modusText = switch ($farbmodus) { 'farbe' { 'Farbe' } 'grau' { 'Graustufen' } 'sw' { 'Schwarzweiss' } }
+if ($einfach) { $modusText = 'Geraetevorgabe' }
 $seitenText = if ($duplex) { 'Duplex' } else { 'Einseitig' }
 $leerText = ''
 if ($geradeRichten) { $leerText += ', gerade richten' }
@@ -1017,9 +1065,18 @@ try {
     }
 } catch {
     Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
-    Fehler "Der Scanvorgang ist fehlgeschlagen: $($_.Exception.Message.Trim())"
-    Info   "Pruefen Sie, ob das Geraet eingeschaltet ist und keine andere Software (z.B."
-    Info   "CaptureOnTouch) den Scanner gerade belegt."
+    $meldung = $_.Exception.Message.Trim()
+    $hr = Get-HResult $_.Exception
+    Fehler "Der Scanvorgang ist fehlgeschlagen: $meldung"
+    if ($hr -ne 0) { Info ("Fehlernummer: 0x{0:X8}" -f $hr) }
+    $belegt = Zeige-Belegung
+    if (-not $belegt) {
+        Info "Moegliche Ursachen:"
+        Info "  - das Geraet ist aus oder das USB-Kabel steckt nicht fest"
+        Info "  - der Treiber verweigert eine Einstellung: 'Scan.bat /einfach' versuchen"
+        Info "  - ein Neustart loest haengende Treiberteile"
+        Info "Mehr Hinweise liefert Diagnose.bat"
+    }
     Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
     exit 5
 }

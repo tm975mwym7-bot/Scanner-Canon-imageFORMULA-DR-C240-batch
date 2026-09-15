@@ -235,6 +235,54 @@ function Get-ErgebnisPfad([string]$protokoll) {
 }
 
 # ---------------------------------------------------------------------------
+# Programme, die den Scanner belegen (haeufigste Ursache fuer Scanfehler)
+# ---------------------------------------------------------------------------
+$script:Belegmuster = @{
+    'CaptureOnTouch'     = 'Canon CaptureOnTouch'
+    'CaptureOnTouchLite' = 'Canon CaptureOnTouch Lite'
+    'COTLite'            = 'Canon CaptureOnTouch Lite'
+    'CNMCOT'             = 'Canon CaptureOnTouch (Hintergrund)'
+    'CNQL240'            = 'Canon DR-C240 Hilfsprogramm'
+    'ScanButtonMonitor'  = 'Canon Tastenüberwachung'
+    'CNMScanButton'      = 'Canon Tastenüberwachung'
+    'wiaacmgr'           = 'Windows-Scan-Assistent'
+    'WFS'                = 'Windows-Fax und -Scan'
+    'WindowsScan'        = 'Windows-App Scannen'
+    'NAPS2'              = 'NAPS2'
+    'ScanGear'           = 'Canon ScanGear'
+    'PaperStream'        = 'PaperStream'
+    'ScanSnap'           = 'ScanSnap'
+}
+
+function Get-BelegendeProgramme {
+    $gefunden = @()
+    try {
+        foreach ($prozess in (Get-Process -ErrorAction SilentlyContinue)) {
+            if ($script:Belegmuster.ContainsKey($prozess.ProcessName)) {
+                $gefunden += [pscustomobject]@{
+                    Prozess = $prozess
+                    Text    = $script:Belegmuster[$prozess.ProcessName]
+                }
+            }
+        }
+    } catch { }
+    return $gefunden
+}
+
+function Beende-BelegendeProgramme {
+    $offen = @(Get-BelegendeProgramme)
+    foreach ($b in $offen) {
+        try {
+            [void]$b.Prozess.CloseMainWindow()
+            Start-Sleep -Milliseconds 600
+            if (-not $b.Prozess.HasExited) { $b.Prozess.Kill() }
+        } catch { }
+    }
+    Start-Sleep -Milliseconds 400
+    return (@(Get-BelegendeProgramme).Count -eq 0)
+}
+
+# ---------------------------------------------------------------------------
 # Scanner ueber WIA auflisten
 # ---------------------------------------------------------------------------
 function Get-ScannerNamen {
@@ -657,22 +705,27 @@ $txtLog.BackColor  = [System.Drawing.Color]::White
 $txtLog.Font       = New-Object System.Drawing.Font('Consolas', 9)
 
 $btnLink          = New-Object System.Windows.Forms.Button
-$btnLink.Text     = 'Verknüpfung auf dem Desktop'
+$btnLink.Text     = 'Verknüpfung'
 $btnLink.Location = New-Object System.Drawing.Point(18, 376)
-$btnLink.Size     = New-Object System.Drawing.Size(210, 26)
+$btnLink.Size     = New-Object System.Drawing.Size(150, 26)
+
+$btnFrei          = New-Object System.Windows.Forms.Button
+$btnFrei.Text     = 'Scanner freigeben'
+$btnFrei.Location = New-Object System.Drawing.Point(176, 376)
+$btnFrei.Size     = New-Object System.Drawing.Size(130, 26)
 
 $btnKennwort          = New-Object System.Windows.Forms.Button
 $btnKennwort.Text     = 'Kennwort ändern'
-$btnKennwort.Location = New-Object System.Drawing.Point(236, 376)
-$btnKennwort.Size     = New-Object System.Drawing.Size(150, 26)
+$btnKennwort.Location = New-Object System.Drawing.Point(314, 376)
+$btnKennwort.Size     = New-Object System.Drawing.Size(140, 26)
 
 $btnServiceZu          = New-Object System.Windows.Forms.Button
 $btnServiceZu.Text     = 'Service schließen'
-$btnServiceZu.Location = New-Object System.Drawing.Point(452, 376)
-$btnServiceZu.Size     = New-Object System.Drawing.Size(150, 26)
+$btnServiceZu.Location = New-Object System.Drawing.Point(462, 376)
+$btnServiceZu.Size     = New-Object System.Drawing.Size(140, 26)
 
 $pnlService.Controls.AddRange(@($lblService, $grpGeraet, $grpAblage, $chkGerade, $chkLeer, $chkKachel,
-                                $lblProt, $txtLog, $btnLink, $btnKennwort, $btnServiceZu))
+                                $lblProt, $txtLog, $btnLink, $btnFrei, $btnKennwort, $btnServiceZu))
 $form.Controls.Add($pnlService)
 
 # --- Fusszeile --------------------------------------------------------------
@@ -1070,6 +1123,26 @@ $btnLink.Add_Click({
     }
 })
 
+$btnFrei.Add_Click({
+    $offen = @(Get-BelegendeProgramme)
+    if ($offen.Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show($form,
+            'Es läuft kein Programm, das den Scanner belegt.', 'Scanner freigeben', 'OK', 'Information')
+        return
+    }
+    $namen = ($offen | ForEach-Object { $_.Text } | Select-Object -Unique) -join "`r`n  - "
+    $antwort = [System.Windows.Forms.MessageBox]::Show($form,
+        ("Diese Programme greifen auf den Scanner zu:`r`n  - $namen`r`n`r`nJetzt beenden?"),
+        'Scanner freigeben', 'YesNo', 'Question')
+    if ($antwort -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    if (Beende-BelegendeProgramme) {
+        Setze-Status 'Der Scanner ist jetzt frei.'
+    } else {
+        [void][System.Windows.Forms.MessageBox]::Show($form,
+            'Mindestens ein Programm ließ sich nicht beenden.', 'Scanner freigeben', 'OK', 'Warning')
+    }
+})
+
 $btnKennwort.Add_Click({
     if (Setze-NeuesKennwort 'Kennwort ändern' 'Neues Servicekennwort:') {
         [void][System.Windows.Forms.MessageBox]::Show($form, 'Das Servicekennwort wurde geändert.', 'Kennwort ändern', 'OK', 'Information')
@@ -1137,9 +1210,9 @@ $timer.Add_Tick({
             else         { Setze-Status 'Fertig.' }
         }
         2 { Setze-Status 'Fehlerhafte Einstellung - bitte den Service verständigen.' }
-        3 { Setze-Status 'Kein Scanner gefunden - Gerät einschalten und Kabel prüfen.' }
+        3 { Setze-Status 'Kein Scanner gefunden - Gerät einschalten und Kabel prüfen.'; Biete-Freigabe }
         4 { Setze-Status 'Es wurde kein Blatt eingezogen - Dokument einlegen und erneut auf Scannen klicken.' }
-        5 { Setze-Status 'Fehler während des Scans - läuft eine andere Scan-Software?' }
+        5 { Setze-Status 'Fehler während des Scans - läuft eine andere Scan-Software?'; Biete-Freigabe }
         6 { Setze-Status 'Die Datei konnte nicht gespeichert werden - bitte den Service verständigen.' }
         9 { Setze-Status 'PowerShell wurde nicht gefunden.' }
         default { Setze-Status "Beendet (Rückgabewert $code)." }
@@ -1203,6 +1276,25 @@ $btnScan.Add_Click({ Starte-Scan })
 # ---------------------------------------------------------------------------
 # Fenster und Kachel verwalten
 # ---------------------------------------------------------------------------
+# Nach einem Fehler: belegende Programme nennen und das Beenden anbieten
+function Biete-Freigabe {
+    $offen = @(Get-BelegendeProgramme)
+    if ($offen.Count -eq 0) { return }
+    $namen = ($offen | ForEach-Object { $_.Text } | Select-Object -Unique) -join "`r`n  - "
+    Zeige-Hauptfenster
+    $antwort = [System.Windows.Forms.MessageBox]::Show($form,
+        ("Der Scanner wird von einem anderen Programm belegt:`r`n  - $namen`r`n`r`n" +
+         "Das ist die häufigste Ursache für diese Meldung.`r`n`r`nProgramme jetzt beenden und erneut scannen?"),
+        'Scanner belegt', 'YesNo', 'Warning')
+    if ($antwort -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    if (Beende-BelegendeProgramme) {
+        Setze-Status 'Der Scanner wurde freigegeben - Scan wird erneut gestartet ...'
+        Starte-Scan
+    } else {
+        Setze-Status 'Mindestens ein Programm ließ sich nicht beenden.'
+    }
+}
+
 function Zeige-Hauptfenster {
     if (-not $form.Visible) { $form.Show() }
     if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
