@@ -125,6 +125,15 @@ FARBE
 WEITERE OPTIONEN
   /dpi <Zahl>       Aufloesung, z.B. 150, 200, 300, 400, 600 (Standard: 300)
   /duplex           Vorder- und Rueckseite scannen
+SCANWEG
+  /naps2            ueber NAPS2 scannen (TWAIN - noetig fuer Duplex bei Canon)
+  /wia              ueber die Windows-Bilderfassung scannen
+                    ohne Angabe: NAPS2 bei beidseitigem Scannen, sonst WIA
+  /naps2pfad <Pfad> NAPS2.Console.exe von Hand angeben
+  /treiber <Name>   Treiber fuer NAPS2: twain (Standard), wia, escl
+  /profil <Name>    ein in NAPS2 angelegtes Profil verwenden
+  /seite <Groesse>  Vorlagengroesse fuer NAPS2, z.B. a4, letter, legal
+
   /dialog           vor dem Scan die Einstellungen des Canon-Treibers zeigen
                     (dort laesst sich Duplex fest einstellen)
   /einfach          ohne eigene Geraeteeinstellungen scannen (bei Treiberfehlern)
@@ -153,6 +162,61 @@ HERAUSGEBER
   IDO GmbH - Anderslebener Str. 40 - 39387 Oschersleben
   (c) 2026 IDO GmbH - alle Rechte vorbehalten
 '@ | Write-Host
+}
+
+# ---------------------------------------------------------------------------
+# NAPS2 suchen
+#
+# NAPS2 ist ein kostenloses Scanprogramm, das ueber TWAIN mit dem Geraet
+# spricht - also ueber denselben Weg wie die Software des Herstellers. Es
+# wird hier nur zum Einlesen der Seiten benutzt; alles Weitere macht dieses
+# Programm selbst.
+# ---------------------------------------------------------------------------
+function Find-Naps2([string]$vorgabe) {
+    if ($vorgabe) {
+        if (Test-Path -LiteralPath $vorgabe -PathType Leaf) { return $vorgabe }
+        $inOrdner = [IO.Path]::Combine($vorgabe, 'NAPS2.Console.exe')
+        if (Test-Path -LiteralPath $inOrdner -PathType Leaf) { return $inOrdner }
+        return $null
+    }
+
+    $orte = @()
+    $basen = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA, $env:ProgramData)
+    foreach ($basis in $basen) {
+        if (-not $basis) { continue }
+        $orte += [IO.Path]::Combine($basis, 'NAPS2', 'NAPS2.Console.exe')
+        $orte += [IO.Path]::Combine($basis, 'Programs', 'NAPS2', 'NAPS2.Console.exe')
+    }
+    # neben diesem Skript (portable Fassung)
+    $eigener = ''
+    if ($env:SCAN_SELF) { $eigener = Split-Path -Parent $env:SCAN_SELF }
+    if ($eigener) {
+        $orte += [IO.Path]::Combine($eigener, 'NAPS2.Console.exe')
+        $orte += [IO.Path]::Combine($eigener, 'NAPS2', 'NAPS2.Console.exe')
+    }
+    foreach ($ort in $orte) {
+        if ($ort -and (Test-Path -LiteralPath $ort -PathType Leaf)) { return $ort }
+    }
+
+    # aus der Liste der installierten Programme
+    try {
+        $schluessel = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*')
+        foreach ($eintrag in (Get-ItemProperty $schluessel -ErrorAction SilentlyContinue)) {
+            if ($eintrag.DisplayName -like 'NAPS2*' -and $eintrag.InstallLocation) {
+                $ort = [IO.Path]::Combine($eintrag.InstallLocation, 'NAPS2.Console.exe')
+                if (Test-Path -LiteralPath $ort -PathType Leaf) { return $ort }
+            }
+        }
+    } catch { }
+
+    # im Suchpfad
+    try {
+        $imPfad = Get-Command 'NAPS2.Console.exe' -ErrorAction SilentlyContinue
+        if ($imPfad) { return $imPfad.Source }
+    } catch { }
+    return $null
 }
 
 # ---------------------------------------------------------------------------
@@ -759,6 +823,11 @@ $zielOrdner = $null
 $basisName  = 'Scan'
 $maxSeiten  = 0
 $qualitaet  = 80
+$wegWahl      = 'auto'        # auto, naps2 oder wia
+$naps2Vorgabe = ''
+$naps2Treiber = 'twain'
+$naps2Profil  = ''
+$seitenGroesse = ''
 $dialog     = $false
 $einfach    = $false
 $duplexWert = 0            # 0 = automatisch probieren
@@ -802,6 +871,12 @@ try {
             'graustufen'{ $farbmodus = 'grau' }
             'sw'        { $farbmodus = 'sw' }
             'duplex'    { $duplex = $true }
+            'naps2'     { $wegWahl = 'naps2' }
+            'wia'       { $wegWahl = 'wia' }
+            'naps2pfad' { $naps2Vorgabe = (Naechstes ([ref]$i) 'naps2pfad') }
+            'treiber'   { $naps2Treiber = (Naechstes ([ref]$i) 'treiber').ToLowerInvariant() }
+            'profil'    { $naps2Profil = (Naechstes ([ref]$i) 'profil') }
+            'seite'     { $seitenGroesse = (Naechstes ([ref]$i) 'seite') }
             'dialog'    { $dialog = $true; $einfach = $true }
             'einfach'   { $einfach = $true }
             'duplexwert' { $duplexWert = AlsZahl (Naechstes ([ref]$i) 'duplexwert') 'duplexwert' }
@@ -841,6 +916,10 @@ try {
 if ($dpi -lt 50 -or $dpi -gt 1200) { Fehler "Die Aufloesung muss zwischen 50 und 1200 dpi liegen."; exit 2 }
 if ($qualitaet -lt 1 -or $qualitaet -gt 100) { Fehler "Die Qualitaet muss zwischen 1 und 100 liegen."; exit 2 }
 if ($maxSeiten -lt 0) { Fehler "Die Seitenzahl darf nicht negativ sein."; exit 2 }
+if ($naps2Treiber -notin @('twain', 'wia', 'escl', 'sane', 'apple')) {
+    Fehler "Fuer /treiber sind twain, wia oder escl moeglich."
+    exit 2
+}
 if ($leerWert -lt 0 -or $leerWert -gt 100) { Fehler "Der Wert fuer /leerwert muss zwischen 0 und 100 liegen."; exit 2 }
 $festDrehen = (($festDrehen % 360) + 360) % 360
 if ($festDrehen -ne 0 -and $festDrehen -ne 90 -and $festDrehen -ne 180 -and $festDrehen -ne 270) {
@@ -850,6 +929,37 @@ if ($festDrehen -ne 0 -and $festDrehen -ne 90 -and $festDrehen -ne 180 -and $fes
 if ($wartenSek -lt 0) { $wartenSek = 0 }
 
 $duplexGewuenscht = $duplex     # merken, bevor der Treiber es eventuell ablehnt
+
+# ---------------------------------------------------------------------------
+# Scanweg festlegen
+# ---------------------------------------------------------------------------
+$naps2Pfad  = Find-Naps2 $naps2Vorgabe
+$nutzeNaps2 = $false
+switch ($wegWahl) {
+    'naps2' {
+        if (-not $naps2Pfad) {
+            Fehler "NAPS2 wurde nicht gefunden."
+            Info   "Kostenlos erhaeltlich unter https://www.naps2.com"
+            Info   "Liegt es an anderer Stelle, den Pfad angeben:"
+            Info   "    Scan.bat /naps2 /naps2pfad C:\Pfad\NAPS2.Console.exe"
+            exit 7
+        }
+        $nutzeNaps2 = $true
+    }
+    'wia' { $nutzeNaps2 = $false }
+    default {
+        # Ohne Angabe: beidseitiges Scannen ueber NAPS2, wenn es da ist. Der
+        # WIA-Weg scheitert bei vielen Treibern genau daran.
+        if ($duplex -and $naps2Pfad) {
+            $nutzeNaps2 = $true
+            Info "Beidseitiges Scannen laeuft ueber NAPS2 - bei vielen Treibern scheitert der WIA-Weg daran."
+            Info "Mit /wia laesst sich das umstellen."
+        } elseif ($duplex -and -not $naps2Pfad) {
+            Warn "Fuer beidseitiges Scannen ist NAPS2 empfehlenswert (https://www.naps2.com)."
+            Info "Ohne NAPS2 wird es ueber die Windows-Bilderfassung versucht."
+        }
+    }
+}
 
 $ungueltig = [IO.Path]::GetInvalidFileNameChars()
 $basisName = -join ($basisName.ToCharArray() | Where-Object { $ungueltig -notcontains $_ })
@@ -873,558 +983,636 @@ if (-not $zielOrdner) {
 }
 
 # ---------------------------------------------------------------------------
-# Scanner suchen
-# ---------------------------------------------------------------------------
-try {
-    $geraeteManager = New-Object -ComObject WIA.DeviceManager
-} catch {
-    Fehler "Die Windows-Bilderfassung (WIA) ist nicht verfuegbar."
-    Info   "Pruefen Sie, ob der Dienst 'Windows-Bilderfassung (WIA)' laeuft:"
-    Info   "    net start stisvc"
-    exit 3
-}
-
-$geraete = @()
-$anzahlGeraete = 0
-try { $anzahlGeraete = [int]$geraeteManager.DeviceInfos.Count } catch { $anzahlGeraete = 0 }
-for ($n = 1; $n -le $anzahlGeraete; $n++) {
-    $info = $geraeteManager.DeviceInfos.Item($n)
-    if ($info.Type -ne 1) { continue }   # 1 = Scanner
-    $name = ''
-    try { $name = [string]$info.Properties.Item('Name').Value } catch { }
-    if (-not $name) { try { $name = [string]$info.DeviceID } catch { $name = "Scanner $n" } }
-    $geraete += [pscustomobject]@{ Name = $name; Info = $info }
-}
-
-if ($nurListe) {
-    if ($geraete.Count -eq 0) {
-        Warn "Es wurde kein Scanner gefunden."
-    } else {
-        Info "Gefundene Scanner:"
-        for ($n = 0; $n -lt $geraete.Count; $n++) { Info ("  [{0}] {1}" -f ($n + 1), $geraete[$n].Name) }
-    }
-    exit 0
-}
-
-if ($geraete.Count -eq 0) {
-    Fehler "Es wurde kein Scanner gefunden."
-    Info   "Pruefen Sie: Geraet eingeschaltet und per USB verbunden, Canon-WIA-/TWAIN-Treiber"
-    Info   "installiert, Geraet erscheint im Geraete-Manager unter 'Bildverarbeitungsgeraete'."
-    exit 3
-}
-
-$auswahl = $geraete[0]
-if ($geraetFilter) {
-    $treffer = $geraete | Where-Object { $_.Name -like "*$geraetFilter*" }
-    if (-not $treffer) {
-        Fehler "Kein Scanner gefunden, dessen Name '$geraetFilter' enthaelt."
-        Info   ("Verfuegbar: " + (($geraete | ForEach-Object { $_.Name }) -join ', '))
-        exit 3
-    }
-    $auswahl = @($treffer)[0]
-} elseif ($geraete.Count -gt 1) {
-    $canon = $geraete | Where-Object { $_.Name -match 'DR-C240|imageFORMULA|Canon' }
-    if ($canon) { $auswahl = @($canon)[0] }
-}
-
-Info "Scanner: $($auswahl.Name)"
-
-try {
-    $geraet = $auswahl.Info.Connect()
-} catch {
-    $meldung = $_.Exception.Message.Trim()
-    $hr = Get-HResult $_.Exception
-    Fehler "Die Verbindung zum Scanner ist fehlgeschlagen: $meldung"
-    if ($hr -ne 0) { Info ("Fehlernummer: 0x{0:X8}" -f $hr) }
-    if (-not (Zeige-Belegung)) {
-        Info "Geraet aus- und wieder einschalten, USB-Kabel direkt am Rechner anschliessen."
-        Info "Mehr Hinweise liefert Diagnose.bat"
-    }
-    exit 3
-}
-
-$element = $geraet.Items.Item(1)
-
-# ---------------------------------------------------------------------------
-# Einzug/Duplex einstellen
-# ---------------------------------------------------------------------------
-$faehigkeiten = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_CAPS
-if ($null -eq $faehigkeiten) { $faehigkeiten = $HANDLE_FEEDER }
-$hatEinzug = ($faehigkeiten -band $HANDLE_FEEDER) -ne 0
-
-# Die Einzugsart gibt es zweimal: am Geraet und am Scan-Element. Laut
-# Microsoft muss zuerst das Element und danach das Geraet gesetzt werden -
-# in der anderen Reihenfolge nehmen viele Treiber den Wert nicht an.
-# Anschliessend wird zurueckgelesen: Nur wenn der Wert wirklich steht, hat
-# der Treiber ihn angenommen. So finden wir die passende Schreibweise, ohne
-# dafuer Papier zu verbrauchen.
-function Setze-Handling([int]$wert) {
-    $steht = $false
-    foreach ($sammlung in @($script:Element.Properties, $script:Geraet.Properties)) {
-        $p = Get-WiaProp $sammlung $WIA_DPS_DOCUMENT_HANDLING_SELECT
-        if ($null -eq $p) { continue }
-        try { $p.Value = $wert } catch { continue }
-        try { if ([int]$p.Value -eq $wert) { $steht = $true } } catch { }
-    }
-    return $steht
-}
-
-# Welche Werte meldet der Treiber als gueltig? (nur zur Anzeige)
-function Get-HandlingWerte {
-    $liste = @()
-    foreach ($sammlung in @($script:Element.Properties, $script:Geraet.Properties)) {
-        $p = Get-WiaProp $sammlung $WIA_DPS_DOCUMENT_HANDLING_SELECT
-        if ($null -eq $p) { continue }
-        try { foreach ($w in $p.SubTypeValues) { $liste += [int]$w } } catch { }
-    }
-    return ($liste | Select-Object -Unique)
-}
-
-# Auf Wunsch die Einstellungen des Treibers zeigen. Was dort eingestellt
-# wird - auch Duplex - gilt fuer den folgenden Scan.
-if ($dialog) {
-    Info "Die Einstellungen des Scanner-Treibers werden geoeffnet ..."
-    Info "Dort 'Scanseite' bzw. 'Scanning Side' auf Duplex stellen und mit OK bestaetigen."
-    $dialogOffen = $false
-    try {
-        $wiaDialog = New-Object -ComObject WIA.CommonDialog
-
-        # Die Automation kennt zwei Eigenschaftsdialoge - je nach Treiber
-        # steckt die Scanseite im einen oder im anderen. Beide werden
-        # nacheinander versucht, mit und ohne zweitem Parameter.
-        $wege = @(
-            @{ Was = 'Element'; Aufruf = { $wiaDialog.ShowItemProperties($script:Element, $false) } }
-            @{ Was = 'Element'; Aufruf = { $wiaDialog.ShowItemProperties($script:Element) } }
-            @{ Was = 'Geraet';  Aufruf = { $wiaDialog.ShowDeviceProperties($script:Geraet, $false) } }
-            @{ Was = 'Geraet';  Aufruf = { $wiaDialog.ShowDeviceProperties($script:Geraet) } }
-        )
-        foreach ($weg in $wege) {
-            try {
-                $ergebnis = & $weg.Aufruf
-                $dialogOffen = $true
-                if ($null -ne $ergebnis) {
-                    if ($weg.Was -eq 'Element') { $element = $ergebnis; $script:Element = $ergebnis }
-                    else                        { $geraet  = $ergebnis; $script:Geraet  = $ergebnis }
-                }
-                Info "Die Einstellungen des Treibers werden uebernommen."
-                break
-            } catch {
-                continue
-            }
-        }
-        if (-not $dialogOffen) {
-            Warn "Dieser Treiber bietet der Automation keinen Einstellungsdialog an."
-        }
-    } catch {
-        Warn "Der Einstellungsdialog liess sich nicht oeffnen ($($_.Exception.Message.Trim()))."
-    }
-
-    if (-not $dialogOffen) {
-        Info ""
-        Info "Duplex laesst sich stattdessen im Scanprofil von Windows festlegen:"
-        Info "  1. Windows-Taste + R, dann eingeben:  control sticpl.cpl"
-        Info "  2. Scanner auswaehlen -> Scanprofile -> Bearbeiten"
-        Info "  3. Quelle: 'Einzug (beidseitiger Scan)' - steht das dort zur Auswahl,"
-        Info "     beherrscht der Treiber Duplex ueber WIA; fehlt es, kann er es nicht."
-        Info "Alternativ bleibt CaptureOnTouch von Canon."
-    }
-}
-
-# Nicht jeder Treiber versteht dieselbe Schreibweise fuer Duplex. Deshalb
-# stehen mehrere bereit; scheitert der Scan, wird der Reihe nach umgestellt
-# und zuletzt einseitig gescannt, statt ganz aufzugeben.
-$script:Geraet  = $geraet
-$script:Element = $element
-
-$einzugsWege = @()
-if ($hatEinzug) {
-    if ($duplex) {
-        if (($faehigkeiten -band $HANDLE_DUPLEX) -ne 0) {
-            # von der empfohlenen Schreibweise absteigend zur einfachsten
-            $einzugsWege += @{ Wert = ($HANDLE_FEEDER -bor $HANDLE_DUPLEX -bor $HANDLE_FRONT_FIRST); Text = 'Einzug + Duplex + Vorderseite zuerst'; Duplex = $true }
-            $einzugsWege += @{ Wert = ($HANDLE_FEEDER -bor $HANDLE_DUPLEX); Text = 'Einzug + Duplex'; Duplex = $true }
-            $einzugsWege += @{ Wert = $HANDLE_DUPLEX;                       Text = 'nur Duplex';      Duplex = $true }
-        } else {
-            Warn "Der Scanner meldet keine Duplex-Faehigkeit - es wird einseitig gescannt."
-            $duplex = $false
-        }
-    }
-    $einzugsWege += @{ Wert = ($HANDLE_FEEDER -bor $HANDLE_FRONT_ONLY); Text = 'Einzug, nur Vorderseite'; Duplex = $false }
-    $einzugsWege += @{ Wert = $HANDLE_FEEDER; Text = 'Einzug einseitig'; Duplex = $false }
-} elseif (($faehigkeiten -band $HANDLE_FLATBED) -ne 0) {
-    $einzugsWege += @{ Wert = $HANDLE_FLATBED; Text = 'Flachbett'; Duplex = $false }
-}
-
-if ($duplexWert -gt 0) {
-    # von Hand vorgegeben: nur diesen Wert verwenden
-    $einzugsWege = @(@{ Wert = $duplexWert; Text = "fest vorgegeben ($duplexWert)"; Duplex = (($duplexWert -band $HANDLE_DUPLEX) -ne 0) })
-}
-
-if ($dialog) {
-    # Was im Treiberdialog eingestellt wurde, darf nicht ueberschrieben werden.
-    Info "Die Einzugsart bleibt so, wie sie im Treiber eingestellt ist."
-    $einzugsWege = @()
-}
-
-$script:EinzugsWege = $einzugsWege
-
-function Setze-Einzugsart([int]$nummer) {
-    if ($nummer -ge $script:EinzugsWege.Count) { return $false }
-    return (Setze-Handling ([int]$script:EinzugsWege[$nummer].Wert))
-}
-
-# Die erste Schreibweise suchen, die der Treiber wirklich uebernimmt
-$wegNummer   = -1
-$einzugsWert = 0
-for ($n = 0; $n -lt $einzugsWege.Count; $n++) {
-    if (Setze-Einzugsart $n) {
-        $wegNummer   = $n
-        $einzugsWert = $einzugsWege[$n].Wert
-        break
-    }
-}
-
-if ($wegNummer -lt 0) {
-    if ($einzugsWege.Count -gt 0) {
-        Warn "Keine Einzugsart wurde uebernommen - es gilt die Einstellung des Treibers."
-        $gueltig = @(Get-HandlingWerte)
-        if ($gueltig.Count -gt 0) { Info ("Der Treiber meldet als gueltig: " + ($gueltig -join ', ')) }
-        $wegNummer = 0
-        $einzugsWert = $einzugsWege[0].Wert
-    }
-} else {
-    $weg = $einzugsWege[$wegNummer]
-    if ($duplex -and -not $weg.Duplex) {
-        Warn "Der Treiber nimmt keine Duplex-Einstellung an - es wird einseitig gescannt."
-        Info "Welche Schreibweisen Ihr Geraet kennt, zeigt:  Diagnose.bat /duplextest"
-        $duplex = $false
-    } elseif ($wegNummer -gt 0 -and $weg.Duplex) {
-        Info "Duplex ueber: $($weg.Text)"
-    }
-}
-# Pro Transfer genau eine Seite liefern, die Schleife unten holt die weiteren Seiten.
-Set-WiaWert $geraet.Properties $WIA_DPS_PAGES 1 | Out-Null
-
-# ---------------------------------------------------------------------------
-# Bildeinstellungen (Farbe, Aufloesung, Scanbereich)
-# ---------------------------------------------------------------------------
-switch ($farbmodus) {
-    'farbe' { $datentyp = 3; $tiefe = 24; $absicht = 1 }
-    'grau'  { $datentyp = 2; $tiefe = 8;  $absicht = 2 }
-    'sw'    { $datentyp = 0; $tiefe = 1;  $absicht = 4 }
-}
-
-if ($einfach) {
-    # Manche Treiber stolpern ueber gesetzte Eigenschaften. Im einfachen Modus
-    # bleibt alles so, wie es der Treiber selbst vorgibt.
-    Warn "Einfacher Modus: Farbe, Aufloesung und Scanbereich bleiben beim Geraet."
-    $dpi = Get-WiaWert $element.Properties $WIA_IPS_XRES
-    if (-not $dpi) { $dpi = 300 }
-} else {
-
-Set-WiaWert $element.Properties $WIA_IPS_CUR_INTENT $absicht | Out-Null
-if (-not (Set-WiaWert $element.Properties $WIA_IPA_DATATYPE $datentyp)) {
-    Warn "Der Farbmodus konnte nicht gesetzt werden - es gilt die Geraeteeinstellung."
-}
-Set-WiaWert $element.Properties $WIA_IPA_DEPTH $tiefe | Out-Null
-
-# Aufloesung aendern und den Scanbereich mitskalieren, damit nichts abgeschnitten wird
-$altDpi     = Get-WiaWert $element.Properties $WIA_IPS_XRES
-$altBreite  = Get-WiaWert $element.Properties $WIA_IPS_XEXTENT
-$altHoehe   = Get-WiaWert $element.Properties $WIA_IPS_YEXTENT
-
-$dpiGesetzt = (Set-WiaWert $element.Properties $WIA_IPS_XRES $dpi) -and (Set-WiaWert $element.Properties $WIA_IPS_YRES $dpi)
-if (-not $dpiGesetzt) {
-    Warn "Die Aufloesung $dpi dpi wird nicht unterstuetzt - es gilt die Geraeteeinstellung."
-    $dpi = Get-WiaWert $element.Properties $WIA_IPS_XRES
-    if (-not $dpi) { $dpi = 300 }
-} elseif ($altDpi -and $altDpi -gt 0 -and $altBreite -and $altHoehe) {
-    $faktor = $dpi / [double]$altDpi
-    if ([math]::Abs($faktor - 1.0) -gt 0.001) {
-        $neuBreite = [int][math]::Round($altBreite * $faktor)
-        $neuHoehe  = [int][math]::Round($altHoehe  * $faktor)
-        $maxBreite = Get-WiaMax $element.Properties $WIA_IPS_XEXTENT
-        $maxHoehe  = Get-WiaMax $element.Properties $WIA_IPS_YEXTENT
-        if ($maxBreite -and $neuBreite -gt $maxBreite) { $neuBreite = [int]$maxBreite }
-        if ($maxHoehe  -and $neuHoehe  -gt $maxHoehe)  { $neuHoehe  = [int]$maxHoehe }
-        # Nur anpassen, wenn der Treiber den Bereich nicht selbst nachgezogen hat
-        if ((Get-WiaWert $element.Properties $WIA_IPS_XEXTENT) -eq $altBreite) {
-            Set-WiaWert $element.Properties $WIA_IPS_XPOS 0 | Out-Null
-            Set-WiaWert $element.Properties $WIA_IPS_YPOS 0 | Out-Null
-            Set-WiaWert $element.Properties $WIA_IPS_XEXTENT $neuBreite | Out-Null
-            Set-WiaWert $element.Properties $WIA_IPS_YEXTENT $neuHoehe  | Out-Null
-        }
-    }
-}
-
-}   # Ende des Zweigs ohne /einfach
-
-# Manche Treiber legen fuer Duplex eigene Elemente an (Vorder-/Rueckseite).
-$anzahlElemente = 1
-try { $anzahlElemente = [int]$geraet.Items.Count } catch { $anzahlElemente = 1 }
-if ($anzahlElemente -gt 1) {
-    Info "Der Treiber bietet $anzahlElemente Scan-Elemente an - es werden alle nacheinander abgeholt."
-}
-
-$modusText = switch ($farbmodus) { 'farbe' { 'Farbe' } 'grau' { 'Graustufen' } 'sw' { 'Schwarzweiss' } }
-if ($einfach) { $modusText = 'Geraetevorgabe' }
-$seitenText = if ($duplex) { 'Duplex' } else { 'Einseitig' }
-if ($dialog) { $seitenText = 'Seiten laut Treiber' }
-$leerText = ''
-if ($geradeRichten) { $leerText += ', gerade richten' }
-if ($festDrehen -ne 0) { $leerText += ", um $festDrehen Grad drehen" }
-if ($leerseiten) { $leerText += ', leere Seiten weglassen' }
-Info "Einstellungen: $modusText, $dpi dpi, $seitenText, Ausgabe: $($format.ToUpperInvariant())$leerText"
-
-# ---------------------------------------------------------------------------
-# Transferformat waehlen
-# ---------------------------------------------------------------------------
-$verfuegbareFormate = @()
-try { foreach ($f in $element.Formats) { $verfuegbareFormate += [string]$f } } catch { }
-
-function KannFormat($liste, $guid) {
-    if ($liste.Count -eq 0) { return $true }   # Treiber meldet nichts: einfach versuchen
-    return ($liste -contains $guid)
-}
-
-# Fuer PDF/JPG ist JPEG am sparsamsten, fuer PNG/TIFF und Schwarzweiss
-# wird verlustfrei uebertragen, damit nicht zweimal komprimiert wird.
-if ($verfuegbareFormate.Count -gt 0) {
-    $formatNamen = @()
-    foreach ($f in $verfuegbareFormate) {
-        switch ($f.ToUpperInvariant()) {
-            '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'JPEG' }
-            '{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'PNG' }
-            '{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'BMP' }
-            '{B96B3CB1-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'TIFF' }
-            default { $formatNamen += $f }
-        }
-    }
-    Info ("Der Treiber meldet diese Bildformate: " + ($formatNamen -join ', '))
-}
-
-$transferFormat = $FMT_BMP
-$transferEndung = '.bmp'
-if ($duplex -or $dialog) {
-    # Beidseitig kommen Vorder- und Rueckseite in EINER Uebertragung - das
-    # kann nur ein mehrseitenfaehiges Format wie TIFF aufnehmen. Angefordert
-    # wird es auch dann, wenn der Treiber es nicht in seiner Liste fuehrt:
-    # die Liste der WIA-Automation ist bei manchen Treibern unvollstaendig.
-    $transferFormat = $FMT_TIFF
-    $transferEndung = '.tif'
-} elseif (($format -eq 'pdf' -or $format -eq 'jpg') -and $farbmodus -ne 'sw' -and (KannFormat $verfuegbareFormate $FMT_JPEG)) {
-    $transferFormat = $FMT_JPEG
-    $transferEndung = '.jpg'
-} elseif (KannFormat $verfuegbareFormate $FMT_PNG) {
-    $transferFormat = $FMT_PNG
-    $transferEndung = '.png'
-}
-
-# ---------------------------------------------------------------------------
-# Auf eingelegtes Papier warten
-# ---------------------------------------------------------------------------
-if ($hatEinzug) {
-    $status = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_STATUS
-    if ($null -ne $status -and ($status -band 1) -eq 0) {
-        Info "Bitte Dokument in den Einzug legen ..."
-        $frist = (Get-Date).AddSeconds($wartenSek)
-        while ((Get-Date) -lt $frist) {
-            Start-Sleep -Milliseconds 700
-            $status = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_STATUS
-            if ($null -eq $status -or ($status -band 1) -ne 0) { break }
-        }
-        if ($null -ne $status -and ($status -band 1) -eq 0) {
-            Fehler "Es liegt kein Papier im Einzug - der Scan wurde abgebrochen."
-            exit 4
-        }
-    }
-}
-
-# ---------------------------------------------------------------------------
 # Scannen
+#
+# Zwei Wege stehen zur Verfuegung:
+#   - ueber NAPS2, das TWAIN spricht und damit auch Geraete bedient, deren
+#     WIA-Treiber beim beidseitigen Scannen aussteigt
+#   - ueber die Windows-Bilderfassung (WIA), ganz ohne Zusatzsoftware
+# Die Weiterverarbeitung - Leerseiten, Ausrichten, PDF, Ablage - ist fuer
+# beide Wege dieselbe.
 # ---------------------------------------------------------------------------
 $zeitstempel = Get-Date -Format 'yyyy-MM-dd_HHmmss'
 $arbeitsOrdner = [IO.Path]::Combine([IO.Path]::GetTempPath(), "Scan_" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $arbeitsOrdner -Force | Out-Null
 
-$probierteFormate = @($transferFormat)
 $rohSeiten = @()
-$seitenNr  = 0
 $abbruch   = $null
 
-Info ""
-try {
-    while ($true) {
-        if ($maxSeiten -gt 0 -and $seitenNr -ge $maxSeiten) { break }
-        $seitenNr++
-        $wortBlatt = 'Seite'
-        if ($duplex -or $dialog) { $wortBlatt = 'Blatt' }
-        Write-Host ("  {0} {1} wird gescannt ..." -f $wortBlatt, $seitenNr) -NoNewline
+if ($nutzeNaps2) {
+    # ---- Bildbeschaffung ueber NAPS2 ---------------------------------------
+    Info "Scanweg: NAPS2 (Treiber: $naps2Treiber)"
 
-        $bild = $null
-        try {
-            # Scheitert die erste Seite, liegt es meist an einer Einstellung, die
-            # der Treiber nicht mag. Dann werden der Reihe nach andere Duplex-
-            # Schreibweisen und zuletzt ein anderes Bildformat probiert.
-            $rettung = 0
-            while ($true) {
-                try {
-                    $bild = $element.Transfer($transferFormat)
-                    break
-                } catch {
-                    $hrErst = Get-HResult $_.Exception
-                    $textErst = $_.Exception.Message.Trim()
-                    $istPapierfehler = ($hrErst -eq $ERR_PAPER_EMPTY -or $hrErst -eq $ERR_PAPER_JAM -or $hrErst -eq $ERR_OFFLINE)
-                    # Beim ersten Anlauf heisst "kein Papier" wirklich kein Papier.
-                    # Danach kann es auch an der geaenderten Einzugsart liegen.
-                    if ($seitenNr -ne 1 -or $rettung -ge 3) { throw }
-                    if ($istPapierfehler -and $rettung -eq 0) { throw }
-
-                    # Den echten Fehler zeigen - sonst raet man im Dunkeln.
-                    Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
-                    Warn ("Die Uebertragung schlug fehl: {0}" -f $textErst)
-                    if ($hrErst -ne 0) { Info ("  Fehlernummer: 0x{0:X8}{1}" -f $hrErst, (Get-WiaFehlerText $hrErst)) }
-
-                    # Ist das Blatt beim Fehlversuch durchgelaufen, hilft kein
-                    # weiterer Versuch - dafuer fehlt schlicht die Vorlage.
-                    if ($istPapierfehler) {
-                        Warn "Das Blatt ist beim Fehlversuch durchgelaufen - der Einzug ist leer."
-                        Info "Bitte neu einlegen und erneut starten."
-                        throw
-                    }
-
-                    # Liegt ueberhaupt noch Papier im Fach? Jeder weitere Versuch
-                    # wuerde sonst nur ein weiteres Blatt durchziehen.
-                    if ($hatEinzug) {
-                        $papier = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_STATUS
-                        if ($null -ne $papier -and ($papier -band 1) -eq 0) {
-                            Warn "Der Scanner hat das Blatt bereits eingezogen - es liegt keines mehr im Fach."
-                            Info "Deshalb wird nicht weiter probiert. Bitte das Blatt neu einlegen."
-                            Info "Welche Einstellung das Geraet annimmt, zeigt:  Diagnose.bat /duplextest"
-                            throw
-                        }
-                    }
-                    $rettung++
-
-                    # 0x8000FFFF heisst: Der Treiber bringt seine Bilder im
-                    # angeforderten Format nicht unter. Dann hilft ein anderes
-                    # Bildformat, nicht eine andere Einzugsart. Jedes Format
-                    # wird hoechstens einmal versucht.
-                    $istFormatfehler = ($hrErst -eq -2147418113 -or $hrErst -eq -2147024809)
-                    if ($istFormatfehler) {
-                        $naechstes = $null
-                        $naechsteEndung = ''
-                        $naechsterText = ''
-                        if ($probierteFormate -notcontains $FMT_TIFF) {
-                            $naechstes = $FMT_TIFF; $naechsteEndung = '.tif'
-                            $naechsterText = 'mehrseitenfaehigem TIFF'
-                        } elseif ($probierteFormate -notcontains $FMT_BMP) {
-                            $naechstes = $FMT_BMP; $naechsteEndung = '.bmp'
-                            $naechsterText = 'BMP'
-                        }
-                        if ($naechstes) {
-                            Info ("  Es wird mit {0} versucht ..." -f $naechsterText)
-                            $transferFormat = $naechstes
-                            $transferEndung = $naechsteEndung
-                            $probierteFormate += $naechstes
-                            Write-Host ("  {0} {1} wird gescannt ..." -f $wortBlatt, $seitenNr) -NoNewline
-                            continue
-                        }
-                    }
-
-                    if (($wegNummer + 1) -lt $einzugsWege.Count) {
-                        $wegNummer++
-                        $weg = $einzugsWege[$wegNummer]
-                        Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
-                        if ($weg.Duplex) {
-                            Warn "Diese Duplex-Einstellung lehnt der Treiber ab - es wird '$($weg.Text)' versucht."
-                        } elseif ($duplex) {
-                            Warn "Der Treiber nimmt keine Duplex-Vorgabe an - es wird einseitig gescannt."
-                            Info "Beidseitig geht ueber die Einstellung im Treiber selbst:  Scan.bat /dialog"
-                            $duplex = $false
-                        }
-                        # Element frisch holen, sonst wirkt die Umstellung nicht
-                        try {
-                            $element = $geraet.Items.Item(1)
-                            $script:Element = $element
-                        } catch { }
-                        [void](Setze-Einzugsart $wegNummer)
-                        $einzugsWert = $weg.Wert
-                        Write-Host ("  Seite {0} wird gescannt ..." -f $seitenNr) -NoNewline
-                        continue
-                    }
-
-                    throw
-                }
-            }
-        } catch {
-            # angefangene Statuszeile wieder entfernen
-            Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
-            $hr = Get-HResult $_.Exception
-            if ($hr -eq $ERR_PAPER_EMPTY) {
-                $seitenNr--
-                break
-            }
-            if ($hr -eq $ERR_PAPER_JAM)   { $abbruch = "Papierstau im Einzug." ; $seitenNr--; break }
-            if ($hr -eq $ERR_OFFLINE)     { $abbruch = "Der Scanner ist offline oder belegt."; $seitenNr--; break }
-            if ($seitenNr -gt 1) {
-                $abbruch = "Die Uebertragung wurde nach Seite $($seitenNr - 1) beendet ($($_.Exception.Message.Trim()))."
-                $seitenNr--
-                break
-            }
-            throw
-        }
-
-        $datei = [IO.Path]::Combine($arbeitsOrdner, ("Seite_{0:D4}{1}" -f $seitenNr, $transferEndung))
-        if (Test-Path -LiteralPath $datei) { Remove-Item -LiteralPath $datei -Force }
-        $bild.SaveFile($datei)
-        try { [Runtime.InteropServices.Marshal]::ReleaseComObject($bild) | Out-Null } catch { }
-
-        # Kamen mehrere Seiten in einer Datei (beidseitig), werden sie getrennt
-        $teile = @($datei)
-        try {
-            $teile = @(Teile-Mehrseitig $datei $arbeitsOrdner $seitenNr $qualitaet)
-        } catch {
-            Warn "Die uebertragene Datei liess sich nicht zerlegen ($($_.Exception.Message.Trim()))."
-        }
-        $rohSeiten += $teile
-        if ($teile.Count -gt 1) {
-            Write-Host (" fertig ({0} Seiten)" -f $teile.Count)
-        } else {
-            Write-Host " fertig"
-        }
-
-        if (-not $hatEinzug) { break }   # Flachbett: nur eine Seite
+    $muster = [IO.Path]::Combine($arbeitsOrdner, 'Seite_$(nnnn).jpg')
+    $teile = @(
+        '-o', ('"' + $muster + '"')
+        '--split'
+        '--force'
+        '--driver', $naps2Treiber
+        '--dpi', ([string][int]$dpi)
+        '--jpegquality', ([string][int]$qualitaet)
+        '--verbose'
+    )
+    switch ($farbmodus) {
+        'farbe' { $teile += @('--bitdepth', 'color') }
+        'grau'  { $teile += @('--bitdepth', 'gray') }
+        'sw'    { $teile += @('--bitdepth', 'bw') }
     }
-} catch {
-    Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
-    $meldung = $_.Exception.Message.Trim()
-    $hr = Get-HResult $_.Exception
-    Fehler "Der Scanvorgang ist fehlgeschlagen: $meldung"
-    if ($hr -ne 0) { Info ("Fehlernummer: 0x{0:X8}" -f $hr) }
-    $belegt = Zeige-Belegung
-    if (-not $belegt) {
-        if ($duplexGewuenscht) {
-            Info "Der Scanner hat das Blatt eingezogen, gibt das Bild aber nicht heraus."
-            Info "Dieser Treiber nimmt die Duplex-Vorgabe offenbar nicht von aussen an."
-            Info ""
-            Info "So geht es trotzdem beidseitig:"
-            Info "  1. Scan.bat /dialog      Einstellungen des Treibers oeffnen,"
-            Info "                           dort Duplex waehlen und mit OK bestaetigen"
-            Info "  2. Windows-Scanprofil:   control sticpl.cpl -> Scanprofile ->"
-            Info "                           Quelle 'Einzug (beidseitiger Scan)'"
-            Info "  3. Diagnose.bat /duplextest   zeigt, welche Schreibweisen er kennt"
-            Info "  4. ohne Haken bei Vorder-/Rueckseite scannt er wie gewohnt einseitig"
+    if ($duplex) { $teile += @('--source', 'duplex') } else { $teile += @('--source', 'feeder') }
+    if ($geraetFilter) { $teile += @('--device', ('"' + $geraetFilter + '"')) }
+    if ($naps2Profil)  { $teile += @('--profile', ('"' + $naps2Profil + '"')) }
+    if ($seitenGroesse){ $teile += @('--pagesize', $seitenGroesse) }
+
+    $befehlszeile = ($teile -join ' ')
+    Info "  $([IO.Path]::GetFileName($naps2Pfad)) $befehlszeile"
+    Info ""
+
+    $ausgabeDatei = [IO.Path]::Combine($arbeitsOrdner, 'naps2.log')
+    $fehlerDatei  = [IO.Path]::Combine($arbeitsOrdner, 'naps2.err')
+    $rueckgabe = -1
+    try {
+        $lauf = Start-Process -FilePath $naps2Pfad -ArgumentList $befehlszeile -NoNewWindow -Wait -PassThru `
+                    -RedirectStandardOutput $ausgabeDatei -RedirectStandardError $fehlerDatei
+        $rueckgabe = $lauf.ExitCode
+    } catch {
+        Fehler "NAPS2 liess sich nicht starten: $($_.Exception.Message.Trim())"
+        Info   "Verwendeter Pfad: $naps2Pfad"
+        Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
+        exit 5
+    }
+
+    foreach ($datei in @($ausgabeDatei, $fehlerDatei)) {
+        if (Test-Path -LiteralPath $datei) {
+            foreach ($zeile in (Get-Content -LiteralPath $datei -ErrorAction SilentlyContinue)) {
+                if ("$zeile".Trim()) { Info ("  " + "$zeile".Trim()) }
+            }
+            Remove-Item -LiteralPath $datei -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $rohSeiten = @(Get-ChildItem -LiteralPath $arbeitsOrdner -Filter 'Seite_*.jpg' -ErrorAction SilentlyContinue |
+                   Sort-Object Name | ForEach-Object { $_.FullName })
+
+    if ($rohSeiten.Count -eq 0) {
+        Fehler "Es wurde keine Seite geliefert (Rueckgabewert $rueckgabe)."
+        Info   "Pruefen Sie: Liegt Papier im Einzug? Ist der richtige Scanner eingestellt?"
+        Info   "Angeschlossene Geraete zeigt:  Diagnose.bat /naps2"
+        Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
+        exit 4
+    }
+    Info ("  {0} Seite(n) uebernommen." -f $rohSeiten.Count)
+} else {
+    # ---------------------------------------------------------------------------
+    # Scanner suchen
+    # ---------------------------------------------------------------------------
+    try {
+        $geraeteManager = New-Object -ComObject WIA.DeviceManager
+    } catch {
+        Fehler "Die Windows-Bilderfassung (WIA) ist nicht verfuegbar."
+        Info   "Pruefen Sie, ob der Dienst 'Windows-Bilderfassung (WIA)' laeuft:"
+        Info   "    net start stisvc"
+        exit 3
+    }
+
+    $geraete = @()
+    $anzahlGeraete = 0
+    try { $anzahlGeraete = [int]$geraeteManager.DeviceInfos.Count } catch { $anzahlGeraete = 0 }
+    for ($n = 1; $n -le $anzahlGeraete; $n++) {
+        $info = $geraeteManager.DeviceInfos.Item($n)
+        if ($info.Type -ne 1) { continue }   # 1 = Scanner
+        $name = ''
+        try { $name = [string]$info.Properties.Item('Name').Value } catch { }
+        if (-not $name) { try { $name = [string]$info.DeviceID } catch { $name = "Scanner $n" } }
+        $geraete += [pscustomobject]@{ Name = $name; Info = $info }
+    }
+
+    if ($nurListe) {
+        if ($geraete.Count -eq 0) {
+            Warn "Es wurde kein Scanner gefunden."
         } else {
-            Info "Moegliche Ursachen:"
-            Info "  - das Geraet ist aus oder das USB-Kabel steckt nicht fest"
-            Info "  - der Treiber verweigert eine Einstellung: 'Scan.bat /einfach' versuchen"
-            Info "  - ein Neustart loest haengende Treiberteile"
+            Info "Gefundene Scanner:"
+            for ($n = 0; $n -lt $geraete.Count; $n++) { Info ("  [{0}] {1}" -f ($n + 1), $geraete[$n].Name) }
+        }
+        exit 0
+    }
+
+    if ($geraete.Count -eq 0) {
+        Fehler "Es wurde kein Scanner gefunden."
+        Info   "Pruefen Sie: Geraet eingeschaltet und per USB verbunden, Canon-WIA-/TWAIN-Treiber"
+        Info   "installiert, Geraet erscheint im Geraete-Manager unter 'Bildverarbeitungsgeraete'."
+        exit 3
+    }
+
+    $auswahl = $geraete[0]
+    if ($geraetFilter) {
+        $treffer = $geraete | Where-Object { $_.Name -like "*$geraetFilter*" }
+        if (-not $treffer) {
+            Fehler "Kein Scanner gefunden, dessen Name '$geraetFilter' enthaelt."
+            Info   ("Verfuegbar: " + (($geraete | ForEach-Object { $_.Name }) -join ', '))
+            exit 3
+        }
+        $auswahl = @($treffer)[0]
+    } elseif ($geraete.Count -gt 1) {
+        $canon = $geraete | Where-Object { $_.Name -match 'DR-C240|imageFORMULA|Canon' }
+        if ($canon) { $auswahl = @($canon)[0] }
+    }
+
+    Info "Scanner: $($auswahl.Name)"
+
+    try {
+        $geraet = $auswahl.Info.Connect()
+    } catch {
+        $meldung = $_.Exception.Message.Trim()
+        $hr = Get-HResult $_.Exception
+        Fehler "Die Verbindung zum Scanner ist fehlgeschlagen: $meldung"
+        if ($hr -ne 0) { Info ("Fehlernummer: 0x{0:X8}" -f $hr) }
+        if (-not (Zeige-Belegung)) {
+            Info "Geraet aus- und wieder einschalten, USB-Kabel direkt am Rechner anschliessen."
             Info "Mehr Hinweise liefert Diagnose.bat"
         }
+        exit 3
     }
-    Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
-    exit 5
+
+    $element = $geraet.Items.Item(1)
+
+    # ---------------------------------------------------------------------------
+    # Einzug/Duplex einstellen
+    # ---------------------------------------------------------------------------
+    $faehigkeiten = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_CAPS
+    if ($null -eq $faehigkeiten) { $faehigkeiten = $HANDLE_FEEDER }
+    $hatEinzug = ($faehigkeiten -band $HANDLE_FEEDER) -ne 0
+
+    # Die Einzugsart gibt es zweimal: am Geraet und am Scan-Element. Laut
+    # Microsoft muss zuerst das Element und danach das Geraet gesetzt werden -
+    # in der anderen Reihenfolge nehmen viele Treiber den Wert nicht an.
+    # Anschliessend wird zurueckgelesen: Nur wenn der Wert wirklich steht, hat
+    # der Treiber ihn angenommen. So finden wir die passende Schreibweise, ohne
+    # dafuer Papier zu verbrauchen.
+    function Setze-Handling([int]$wert) {
+        $steht = $false
+        foreach ($sammlung in @($script:Element.Properties, $script:Geraet.Properties)) {
+            $p = Get-WiaProp $sammlung $WIA_DPS_DOCUMENT_HANDLING_SELECT
+            if ($null -eq $p) { continue }
+            try { $p.Value = $wert } catch { continue }
+            try { if ([int]$p.Value -eq $wert) { $steht = $true } } catch { }
+        }
+        return $steht
+    }
+
+    # Welche Werte meldet der Treiber als gueltig? (nur zur Anzeige)
+    function Get-HandlingWerte {
+        $liste = @()
+        foreach ($sammlung in @($script:Element.Properties, $script:Geraet.Properties)) {
+            $p = Get-WiaProp $sammlung $WIA_DPS_DOCUMENT_HANDLING_SELECT
+            if ($null -eq $p) { continue }
+            try { foreach ($w in $p.SubTypeValues) { $liste += [int]$w } } catch { }
+        }
+        return ($liste | Select-Object -Unique)
+    }
+
+    # Auf Wunsch die Einstellungen des Treibers zeigen. Was dort eingestellt
+    # wird - auch Duplex - gilt fuer den folgenden Scan.
+    if ($dialog) {
+        Info "Die Einstellungen des Scanner-Treibers werden geoeffnet ..."
+        Info "Dort 'Scanseite' bzw. 'Scanning Side' auf Duplex stellen und mit OK bestaetigen."
+        $dialogOffen = $false
+        try {
+            $wiaDialog = New-Object -ComObject WIA.CommonDialog
+
+            # Die Automation kennt zwei Eigenschaftsdialoge - je nach Treiber
+            # steckt die Scanseite im einen oder im anderen. Beide werden
+            # nacheinander versucht, mit und ohne zweitem Parameter.
+            $wege = @(
+                @{ Was = 'Element'; Aufruf = { $wiaDialog.ShowItemProperties($script:Element, $false) } }
+                @{ Was = 'Element'; Aufruf = { $wiaDialog.ShowItemProperties($script:Element) } }
+                @{ Was = 'Geraet';  Aufruf = { $wiaDialog.ShowDeviceProperties($script:Geraet, $false) } }
+                @{ Was = 'Geraet';  Aufruf = { $wiaDialog.ShowDeviceProperties($script:Geraet) } }
+            )
+            foreach ($weg in $wege) {
+                try {
+                    $ergebnis = & $weg.Aufruf
+                    $dialogOffen = $true
+                    if ($null -ne $ergebnis) {
+                        if ($weg.Was -eq 'Element') { $element = $ergebnis; $script:Element = $ergebnis }
+                        else                        { $geraet  = $ergebnis; $script:Geraet  = $ergebnis }
+                    }
+                    Info "Die Einstellungen des Treibers werden uebernommen."
+                    break
+                } catch {
+                    continue
+                }
+            }
+            if (-not $dialogOffen) {
+                Warn "Dieser Treiber bietet der Automation keinen Einstellungsdialog an."
+            }
+        } catch {
+            Warn "Der Einstellungsdialog liess sich nicht oeffnen ($($_.Exception.Message.Trim()))."
+        }
+
+        if (-not $dialogOffen) {
+            Info ""
+            Info "Duplex laesst sich stattdessen im Scanprofil von Windows festlegen:"
+            Info "  1. Windows-Taste + R, dann eingeben:  control sticpl.cpl"
+            Info "  2. Scanner auswaehlen -> Scanprofile -> Bearbeiten"
+            Info "  3. Quelle: 'Einzug (beidseitiger Scan)' - steht das dort zur Auswahl,"
+            Info "     beherrscht der Treiber Duplex ueber WIA; fehlt es, kann er es nicht."
+            Info "Alternativ bleibt CaptureOnTouch von Canon."
+        }
+    }
+
+    # Nicht jeder Treiber versteht dieselbe Schreibweise fuer Duplex. Deshalb
+    # stehen mehrere bereit; scheitert der Scan, wird der Reihe nach umgestellt
+    # und zuletzt einseitig gescannt, statt ganz aufzugeben.
+    $script:Geraet  = $geraet
+    $script:Element = $element
+
+    $einzugsWege = @()
+    if ($hatEinzug) {
+        if ($duplex) {
+            if (($faehigkeiten -band $HANDLE_DUPLEX) -ne 0) {
+                # von der empfohlenen Schreibweise absteigend zur einfachsten
+                $einzugsWege += @{ Wert = ($HANDLE_FEEDER -bor $HANDLE_DUPLEX -bor $HANDLE_FRONT_FIRST); Text = 'Einzug + Duplex + Vorderseite zuerst'; Duplex = $true }
+                $einzugsWege += @{ Wert = ($HANDLE_FEEDER -bor $HANDLE_DUPLEX); Text = 'Einzug + Duplex'; Duplex = $true }
+                $einzugsWege += @{ Wert = $HANDLE_DUPLEX;                       Text = 'nur Duplex';      Duplex = $true }
+            } else {
+                Warn "Der Scanner meldet keine Duplex-Faehigkeit - es wird einseitig gescannt."
+                $duplex = $false
+            }
+        }
+        $einzugsWege += @{ Wert = ($HANDLE_FEEDER -bor $HANDLE_FRONT_ONLY); Text = 'Einzug, nur Vorderseite'; Duplex = $false }
+        $einzugsWege += @{ Wert = $HANDLE_FEEDER; Text = 'Einzug einseitig'; Duplex = $false }
+    } elseif (($faehigkeiten -band $HANDLE_FLATBED) -ne 0) {
+        $einzugsWege += @{ Wert = $HANDLE_FLATBED; Text = 'Flachbett'; Duplex = $false }
+    }
+
+    if ($duplexWert -gt 0) {
+        # von Hand vorgegeben: nur diesen Wert verwenden
+        $einzugsWege = @(@{ Wert = $duplexWert; Text = "fest vorgegeben ($duplexWert)"; Duplex = (($duplexWert -band $HANDLE_DUPLEX) -ne 0) })
+    }
+
+    if ($dialog) {
+        # Was im Treiberdialog eingestellt wurde, darf nicht ueberschrieben werden.
+        Info "Die Einzugsart bleibt so, wie sie im Treiber eingestellt ist."
+        $einzugsWege = @()
+    }
+
+    $script:EinzugsWege = $einzugsWege
+
+    function Setze-Einzugsart([int]$nummer) {
+        if ($nummer -ge $script:EinzugsWege.Count) { return $false }
+        return (Setze-Handling ([int]$script:EinzugsWege[$nummer].Wert))
+    }
+
+    # Die erste Schreibweise suchen, die der Treiber wirklich uebernimmt
+    $wegNummer   = -1
+    $einzugsWert = 0
+    for ($n = 0; $n -lt $einzugsWege.Count; $n++) {
+        if (Setze-Einzugsart $n) {
+            $wegNummer   = $n
+            $einzugsWert = $einzugsWege[$n].Wert
+            break
+        }
+    }
+
+    if ($wegNummer -lt 0) {
+        if ($einzugsWege.Count -gt 0) {
+            Warn "Keine Einzugsart wurde uebernommen - es gilt die Einstellung des Treibers."
+            $gueltig = @(Get-HandlingWerte)
+            if ($gueltig.Count -gt 0) { Info ("Der Treiber meldet als gueltig: " + ($gueltig -join ', ')) }
+            $wegNummer = 0
+            $einzugsWert = $einzugsWege[0].Wert
+        }
+    } else {
+        $weg = $einzugsWege[$wegNummer]
+        if ($duplex -and -not $weg.Duplex) {
+            Warn "Der Treiber nimmt keine Duplex-Einstellung an - es wird einseitig gescannt."
+            Info "Welche Schreibweisen Ihr Geraet kennt, zeigt:  Diagnose.bat /duplextest"
+            $duplex = $false
+        } elseif ($wegNummer -gt 0 -and $weg.Duplex) {
+            Info "Duplex ueber: $($weg.Text)"
+        }
+    }
+    # Pro Transfer genau eine Seite liefern, die Schleife unten holt die weiteren Seiten.
+    Set-WiaWert $geraet.Properties $WIA_DPS_PAGES 1 | Out-Null
+
+    # ---------------------------------------------------------------------------
+    # Bildeinstellungen (Farbe, Aufloesung, Scanbereich)
+    # ---------------------------------------------------------------------------
+    switch ($farbmodus) {
+        'farbe' { $datentyp = 3; $tiefe = 24; $absicht = 1 }
+        'grau'  { $datentyp = 2; $tiefe = 8;  $absicht = 2 }
+        'sw'    { $datentyp = 0; $tiefe = 1;  $absicht = 4 }
+    }
+
+    if ($einfach) {
+        # Manche Treiber stolpern ueber gesetzte Eigenschaften. Im einfachen Modus
+        # bleibt alles so, wie es der Treiber selbst vorgibt.
+        Warn "Einfacher Modus: Farbe, Aufloesung und Scanbereich bleiben beim Geraet."
+        $dpi = Get-WiaWert $element.Properties $WIA_IPS_XRES
+        if (-not $dpi) { $dpi = 300 }
+    } else {
+
+    Set-WiaWert $element.Properties $WIA_IPS_CUR_INTENT $absicht | Out-Null
+    if (-not (Set-WiaWert $element.Properties $WIA_IPA_DATATYPE $datentyp)) {
+        Warn "Der Farbmodus konnte nicht gesetzt werden - es gilt die Geraeteeinstellung."
+    }
+    Set-WiaWert $element.Properties $WIA_IPA_DEPTH $tiefe | Out-Null
+
+    # Aufloesung aendern und den Scanbereich mitskalieren, damit nichts abgeschnitten wird
+    $altDpi     = Get-WiaWert $element.Properties $WIA_IPS_XRES
+    $altBreite  = Get-WiaWert $element.Properties $WIA_IPS_XEXTENT
+    $altHoehe   = Get-WiaWert $element.Properties $WIA_IPS_YEXTENT
+
+    $dpiGesetzt = (Set-WiaWert $element.Properties $WIA_IPS_XRES $dpi) -and (Set-WiaWert $element.Properties $WIA_IPS_YRES $dpi)
+    if (-not $dpiGesetzt) {
+        Warn "Die Aufloesung $dpi dpi wird nicht unterstuetzt - es gilt die Geraeteeinstellung."
+        $dpi = Get-WiaWert $element.Properties $WIA_IPS_XRES
+        if (-not $dpi) { $dpi = 300 }
+    } elseif ($altDpi -and $altDpi -gt 0 -and $altBreite -and $altHoehe) {
+        $faktor = $dpi / [double]$altDpi
+        if ([math]::Abs($faktor - 1.0) -gt 0.001) {
+            $neuBreite = [int][math]::Round($altBreite * $faktor)
+            $neuHoehe  = [int][math]::Round($altHoehe  * $faktor)
+            $maxBreite = Get-WiaMax $element.Properties $WIA_IPS_XEXTENT
+            $maxHoehe  = Get-WiaMax $element.Properties $WIA_IPS_YEXTENT
+            if ($maxBreite -and $neuBreite -gt $maxBreite) { $neuBreite = [int]$maxBreite }
+            if ($maxHoehe  -and $neuHoehe  -gt $maxHoehe)  { $neuHoehe  = [int]$maxHoehe }
+            # Nur anpassen, wenn der Treiber den Bereich nicht selbst nachgezogen hat
+            if ((Get-WiaWert $element.Properties $WIA_IPS_XEXTENT) -eq $altBreite) {
+                Set-WiaWert $element.Properties $WIA_IPS_XPOS 0 | Out-Null
+                Set-WiaWert $element.Properties $WIA_IPS_YPOS 0 | Out-Null
+                Set-WiaWert $element.Properties $WIA_IPS_XEXTENT $neuBreite | Out-Null
+                Set-WiaWert $element.Properties $WIA_IPS_YEXTENT $neuHoehe  | Out-Null
+            }
+        }
+    }
+
+    }   # Ende des Zweigs ohne /einfach
+
+    # Manche Treiber legen fuer Duplex eigene Elemente an (Vorder-/Rueckseite).
+    $anzahlElemente = 1
+    try { $anzahlElemente = [int]$geraet.Items.Count } catch { $anzahlElemente = 1 }
+    if ($anzahlElemente -gt 1) {
+        Info "Der Treiber bietet $anzahlElemente Scan-Elemente an - es werden alle nacheinander abgeholt."
+    }
+
+    $modusText = switch ($farbmodus) { 'farbe' { 'Farbe' } 'grau' { 'Graustufen' } 'sw' { 'Schwarzweiss' } }
+    if ($einfach) { $modusText = 'Geraetevorgabe' }
+    $seitenText = if ($duplex) { 'Duplex' } else { 'Einseitig' }
+    if ($dialog) { $seitenText = 'Seiten laut Treiber' }
+    $leerText = ''
+    if ($geradeRichten) { $leerText += ', gerade richten' }
+    if ($festDrehen -ne 0) { $leerText += ", um $festDrehen Grad drehen" }
+    if ($leerseiten) { $leerText += ', leere Seiten weglassen' }
+    Info "Einstellungen: $modusText, $dpi dpi, $seitenText, Ausgabe: $($format.ToUpperInvariant())$leerText"
+
+    # ---------------------------------------------------------------------------
+    # Transferformat waehlen
+    # ---------------------------------------------------------------------------
+    $verfuegbareFormate = @()
+    try { foreach ($f in $element.Formats) { $verfuegbareFormate += [string]$f } } catch { }
+
+    function KannFormat($liste, $guid) {
+        if ($liste.Count -eq 0) { return $true }   # Treiber meldet nichts: einfach versuchen
+        return ($liste -contains $guid)
+    }
+
+    # Fuer PDF/JPG ist JPEG am sparsamsten, fuer PNG/TIFF und Schwarzweiss
+    # wird verlustfrei uebertragen, damit nicht zweimal komprimiert wird.
+    if ($verfuegbareFormate.Count -gt 0) {
+        $formatNamen = @()
+        foreach ($f in $verfuegbareFormate) {
+            switch ($f.ToUpperInvariant()) {
+                '{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'JPEG' }
+                '{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'PNG' }
+                '{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'BMP' }
+                '{B96B3CB1-0728-11D3-9D7B-0000F81EF32E}' { $formatNamen += 'TIFF' }
+                default { $formatNamen += $f }
+            }
+        }
+        Info ("Der Treiber meldet diese Bildformate: " + ($formatNamen -join ', '))
+    }
+
+    $transferFormat = $FMT_BMP
+    $transferEndung = '.bmp'
+    if ($duplex -or $dialog) {
+        # Beidseitig kommen Vorder- und Rueckseite in EINER Uebertragung - das
+        # kann nur ein mehrseitenfaehiges Format wie TIFF aufnehmen. Angefordert
+        # wird es auch dann, wenn der Treiber es nicht in seiner Liste fuehrt:
+        # die Liste der WIA-Automation ist bei manchen Treibern unvollstaendig.
+        $transferFormat = $FMT_TIFF
+        $transferEndung = '.tif'
+    } elseif (($format -eq 'pdf' -or $format -eq 'jpg') -and $farbmodus -ne 'sw' -and (KannFormat $verfuegbareFormate $FMT_JPEG)) {
+        $transferFormat = $FMT_JPEG
+        $transferEndung = '.jpg'
+    } elseif (KannFormat $verfuegbareFormate $FMT_PNG) {
+        $transferFormat = $FMT_PNG
+        $transferEndung = '.png'
+    }
+
+    # ---------------------------------------------------------------------------
+    # Auf eingelegtes Papier warten
+    # ---------------------------------------------------------------------------
+    if ($hatEinzug) {
+        $status = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_STATUS
+        if ($null -ne $status -and ($status -band 1) -eq 0) {
+            Info "Bitte Dokument in den Einzug legen ..."
+            $frist = (Get-Date).AddSeconds($wartenSek)
+            while ((Get-Date) -lt $frist) {
+                Start-Sleep -Milliseconds 700
+                $status = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_STATUS
+                if ($null -eq $status -or ($status -band 1) -ne 0) { break }
+            }
+            if ($null -ne $status -and ($status -band 1) -eq 0) {
+                Fehler "Es liegt kein Papier im Einzug - der Scan wurde abgebrochen."
+                exit 4
+            }
+        }
+    }
+
+    # ---------------------------------------------------------------------------
+    # Scannen
+    # ---------------------------------------------------------------------------
+
+    $probierteFormate = @($transferFormat)
+    $rohSeiten = @()
+    $seitenNr  = 0
+    $abbruch   = $null
+
+    Info ""
+    try {
+        while ($true) {
+            if ($maxSeiten -gt 0 -and $seitenNr -ge $maxSeiten) { break }
+            $seitenNr++
+            $wortBlatt = 'Seite'
+            if ($duplex -or $dialog) { $wortBlatt = 'Blatt' }
+            Write-Host ("  {0} {1} wird gescannt ..." -f $wortBlatt, $seitenNr) -NoNewline
+
+            $bild = $null
+            try {
+                # Scheitert die erste Seite, liegt es meist an einer Einstellung, die
+                # der Treiber nicht mag. Dann werden der Reihe nach andere Duplex-
+                # Schreibweisen und zuletzt ein anderes Bildformat probiert.
+                $rettung = 0
+                while ($true) {
+                    try {
+                        $bild = $element.Transfer($transferFormat)
+                        break
+                    } catch {
+                        $hrErst = Get-HResult $_.Exception
+                        $textErst = $_.Exception.Message.Trim()
+                        $istPapierfehler = ($hrErst -eq $ERR_PAPER_EMPTY -or $hrErst -eq $ERR_PAPER_JAM -or $hrErst -eq $ERR_OFFLINE)
+                        # Beim ersten Anlauf heisst "kein Papier" wirklich kein Papier.
+                        # Danach kann es auch an der geaenderten Einzugsart liegen.
+                        if ($seitenNr -ne 1 -or $rettung -ge 3) { throw }
+                        if ($istPapierfehler -and $rettung -eq 0) { throw }
+
+                        # Den echten Fehler zeigen - sonst raet man im Dunkeln.
+                        Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
+                        Warn ("Die Uebertragung schlug fehl: {0}" -f $textErst)
+                        if ($hrErst -ne 0) { Info ("  Fehlernummer: 0x{0:X8}{1}" -f $hrErst, (Get-WiaFehlerText $hrErst)) }
+
+                        # Ist das Blatt beim Fehlversuch durchgelaufen, hilft kein
+                        # weiterer Versuch - dafuer fehlt schlicht die Vorlage.
+                        if ($istPapierfehler) {
+                            Warn "Das Blatt ist beim Fehlversuch durchgelaufen - der Einzug ist leer."
+                            Info "Bitte neu einlegen und erneut starten."
+                            throw
+                        }
+
+                        # Liegt ueberhaupt noch Papier im Fach? Jeder weitere Versuch
+                        # wuerde sonst nur ein weiteres Blatt durchziehen.
+                        if ($hatEinzug) {
+                            $papier = Get-WiaWert $geraet.Properties $WIA_DPS_DOCUMENT_HANDLING_STATUS
+                            if ($null -ne $papier -and ($papier -band 1) -eq 0) {
+                                Warn "Der Scanner hat das Blatt bereits eingezogen - es liegt keines mehr im Fach."
+                                Info "Deshalb wird nicht weiter probiert. Bitte das Blatt neu einlegen."
+                                Info "Welche Einstellung das Geraet annimmt, zeigt:  Diagnose.bat /duplextest"
+                                throw
+                            }
+                        }
+                        $rettung++
+
+                        # 0x8000FFFF heisst: Der Treiber bringt seine Bilder im
+                        # angeforderten Format nicht unter. Dann hilft ein anderes
+                        # Bildformat, nicht eine andere Einzugsart. Jedes Format
+                        # wird hoechstens einmal versucht.
+                        $istFormatfehler = ($hrErst -eq -2147418113 -or $hrErst -eq -2147024809)
+                        if ($istFormatfehler) {
+                            $naechstes = $null
+                            $naechsteEndung = ''
+                            $naechsterText = ''
+                            if ($probierteFormate -notcontains $FMT_TIFF) {
+                                $naechstes = $FMT_TIFF; $naechsteEndung = '.tif'
+                                $naechsterText = 'mehrseitenfaehigem TIFF'
+                            } elseif ($probierteFormate -notcontains $FMT_BMP) {
+                                $naechstes = $FMT_BMP; $naechsteEndung = '.bmp'
+                                $naechsterText = 'BMP'
+                            }
+                            if ($naechstes) {
+                                Info ("  Es wird mit {0} versucht ..." -f $naechsterText)
+                                $transferFormat = $naechstes
+                                $transferEndung = $naechsteEndung
+                                $probierteFormate += $naechstes
+                                Write-Host ("  {0} {1} wird gescannt ..." -f $wortBlatt, $seitenNr) -NoNewline
+                                continue
+                            }
+                        }
+
+                        if (($wegNummer + 1) -lt $einzugsWege.Count) {
+                            $wegNummer++
+                            $weg = $einzugsWege[$wegNummer]
+                            Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
+                            if ($weg.Duplex) {
+                                Warn "Diese Duplex-Einstellung lehnt der Treiber ab - es wird '$($weg.Text)' versucht."
+                            } elseif ($duplex) {
+                                Warn "Der Treiber nimmt keine Duplex-Vorgabe an - es wird einseitig gescannt."
+                                Info "Beidseitig geht ueber die Einstellung im Treiber selbst:  Scan.bat /dialog"
+                                $duplex = $false
+                            }
+                            # Element frisch holen, sonst wirkt die Umstellung nicht
+                            try {
+                                $element = $geraet.Items.Item(1)
+                                $script:Element = $element
+                            } catch { }
+                            [void](Setze-Einzugsart $wegNummer)
+                            $einzugsWert = $weg.Wert
+                            Write-Host ("  Seite {0} wird gescannt ..." -f $seitenNr) -NoNewline
+                            continue
+                        }
+
+                        throw
+                    }
+                }
+            } catch {
+                # angefangene Statuszeile wieder entfernen
+                Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
+                $hr = Get-HResult $_.Exception
+                if ($hr -eq $ERR_PAPER_EMPTY) {
+                    $seitenNr--
+                    break
+                }
+                if ($hr -eq $ERR_PAPER_JAM)   { $abbruch = "Papierstau im Einzug." ; $seitenNr--; break }
+                if ($hr -eq $ERR_OFFLINE)     { $abbruch = "Der Scanner ist offline oder belegt."; $seitenNr--; break }
+                if ($seitenNr -gt 1) {
+                    $abbruch = "Die Uebertragung wurde nach Seite $($seitenNr - 1) beendet ($($_.Exception.Message.Trim()))."
+                    $seitenNr--
+                    break
+                }
+                throw
+            }
+
+            $datei = [IO.Path]::Combine($arbeitsOrdner, ("Seite_{0:D4}{1}" -f $seitenNr, $transferEndung))
+            if (Test-Path -LiteralPath $datei) { Remove-Item -LiteralPath $datei -Force }
+            $bild.SaveFile($datei)
+            try { [Runtime.InteropServices.Marshal]::ReleaseComObject($bild) | Out-Null } catch { }
+
+            # Kamen mehrere Seiten in einer Datei (beidseitig), werden sie getrennt
+            $teile = @($datei)
+            try {
+                $teile = @(Teile-Mehrseitig $datei $arbeitsOrdner $seitenNr $qualitaet)
+            } catch {
+                Warn "Die uebertragene Datei liess sich nicht zerlegen ($($_.Exception.Message.Trim()))."
+            }
+            $rohSeiten += $teile
+            if ($teile.Count -gt 1) {
+                Write-Host (" fertig ({0} Seiten)" -f $teile.Count)
+            } else {
+                Write-Host " fertig"
+            }
+
+            if (-not $hatEinzug) { break }   # Flachbett: nur eine Seite
+        }
+    } catch {
+        Write-Host ("`r" + (' ' * 44) + "`r") -NoNewline
+        $meldung = $_.Exception.Message.Trim()
+        $hr = Get-HResult $_.Exception
+        Fehler "Der Scanvorgang ist fehlgeschlagen: $meldung"
+        if ($hr -ne 0) { Info ("Fehlernummer: 0x{0:X8}" -f $hr) }
+        $belegt = Zeige-Belegung
+        if (-not $belegt) {
+            if ($duplexGewuenscht) {
+                Info "Der Scanner hat das Blatt eingezogen, gibt das Bild aber nicht heraus."
+                Info "Dieser Treiber nimmt die Duplex-Vorgabe offenbar nicht von aussen an."
+                Info ""
+                Info "So geht es trotzdem beidseitig:"
+                Info "  1. Scan.bat /dialog      Einstellungen des Treibers oeffnen,"
+                Info "                           dort Duplex waehlen und mit OK bestaetigen"
+                Info "  2. Windows-Scanprofil:   control sticpl.cpl -> Scanprofile ->"
+                Info "                           Quelle 'Einzug (beidseitiger Scan)'"
+                Info "  3. Diagnose.bat /duplextest   zeigt, welche Schreibweisen er kennt"
+                Info "  4. ohne Haken bei Vorder-/Rueckseite scannt er wie gewohnt einseitig"
+            } else {
+                Info "Moegliche Ursachen:"
+                Info "  - das Geraet ist aus oder das USB-Kabel steckt nicht fest"
+                Info "  - der Treiber verweigert eine Einstellung: 'Scan.bat /einfach' versuchen"
+                Info "  - ein Neustart loest haengende Treiberteile"
+                Info "Mehr Hinweise liefert Diagnose.bat"
+            }
+        }
+        Remove-Item -LiteralPath $arbeitsOrdner -Recurse -Force -ErrorAction SilentlyContinue
+        exit 5
+    }
 }
 
 if ($abbruch) { Warn $abbruch }

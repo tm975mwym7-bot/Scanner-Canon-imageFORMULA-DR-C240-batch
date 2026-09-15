@@ -15,6 +15,7 @@ rem           Diagnose.bat /scan      zusaetzlich eine Testseite einziehen
 rem           Diagnose.bat /freigeben Programme beenden, die den Scanner belegen
 rem           Diagnose.bat /duplextest probiert aus, welche Duplex-Einstellung
 rem                                    dieser Treiber annimmt (Blatt einlegen!)
+rem           Diagnose.bat /naps2     NAPS2 suchen und dessen Geraete auflisten
 rem ===========================================================================
 
 setlocal enableextensions
@@ -485,6 +486,67 @@ if ($env:DIAG_ARGS -match '/duplextest') {
 }
 
 # ---------------------------------------------------------------------------
+Titel '10. NAPS2 (Weg ueber TWAIN)'
+$naps2Pfad = $null
+$orte = @()
+$basen = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA, $env:ProgramData)
+foreach ($basis in $basen) {
+    if (-not $basis) { continue }
+    $orte += [IO.Path]::Combine($basis, 'NAPS2', 'NAPS2.Console.exe')
+    $orte += [IO.Path]::Combine($basis, 'Programs', 'NAPS2', 'NAPS2.Console.exe')
+}
+if ($env:DIAG_SELF) {
+    $eigener = Split-Path -Parent $env:DIAG_SELF
+    $orte += [IO.Path]::Combine($eigener, 'NAPS2.Console.exe')
+    $orte += [IO.Path]::Combine($eigener, 'NAPS2', 'NAPS2.Console.exe')
+}
+foreach ($ort in $orte) {
+    if ($ort -and (Test-Path -LiteralPath $ort -PathType Leaf)) { $naps2Pfad = $ort; break }
+}
+if (-not $naps2Pfad) {
+    try {
+        foreach ($eintrag in (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                               'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                               'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue)) {
+            if ($eintrag.DisplayName -like 'NAPS2*' -and $eintrag.InstallLocation) {
+                $ort = [IO.Path]::Combine($eintrag.InstallLocation, 'NAPS2.Console.exe')
+                if (Test-Path -LiteralPath $ort -PathType Leaf) { $naps2Pfad = $ort; break }
+            }
+        }
+    } catch { }
+}
+
+if ($naps2Pfad) {
+    Gut ("NAPS2 gefunden: {0}" -f $naps2Pfad)
+    if ($env:DIAG_ARGS -match '/naps2') {
+        foreach ($treiber in @('twain', 'wia')) {
+            Punkt ''
+            Punkt ("Geraete ueber {0}:" -f $treiber.ToUpperInvariant())
+            try {
+                $tmp = [IO.Path]::Combine([IO.Path]::GetTempPath(), ("naps2_{0}.txt" -f $treiber))
+                $lauf = Start-Process -FilePath $naps2Pfad -ArgumentList ("--listdevices --driver " + $treiber) `
+                            -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tmp
+                $zeilen = @(Get-Content -LiteralPath $tmp -ErrorAction SilentlyContinue | Where-Object { "$_".Trim() })
+                if ($zeilen.Count -eq 0) { Punkt '  (keines gemeldet)' }
+                foreach ($z in $zeilen) { Punkt ("  " + $z.Trim()) }
+                Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+            } catch {
+                Punkt ("  Abfrage fehlgeschlagen: " + $_.Exception.Message.Trim())
+            }
+        }
+        Punkt ''
+        Punkt 'Scannen darueber:  Scan.bat /naps2 /duplex'
+    } else {
+        Punkt 'Geraete auflisten:  Diagnose.bat /naps2'
+    }
+} else {
+    Warnung 'NAPS2 ist nicht installiert.'
+    Punkt 'Es spricht TWAIN und beherrscht damit auch beidseitiges Scannen an'
+    Punkt 'Geraeten, deren WIA-Treiber daran scheitert (etwa der Canon DR-C240).'
+    Punkt 'Kostenlos unter https://www.naps2.com'
+}
+
+# ---------------------------------------------------------------------------
 Titel 'Bewertung'
 if (-not $befunde.WiaDienst) {
     Schlecht 'Der Dienst der Windows-Bilderfassung laeuft nicht.'
@@ -533,7 +595,8 @@ else {
 Zeile ''
 Zeile 'Hinweis: "Diagnose.bat /scan" zieht zusaetzlich eine Testseite ein,'
 Zeile '         "Diagnose.bat /freigeben" beendet belegende Programme,'
-Zeile '         "Diagnose.bat /duplextest" prueft die Duplex-Einstellungen.'
+Zeile '         "Diagnose.bat /duplextest" prueft die Duplex-Einstellungen,'
+Zeile '         "Diagnose.bat /naps2" listet die Geraete von NAPS2 auf.'
 
 # ---------------------------------------------------------------------------
 $berichtOrdner = [Environment]::GetFolderPath('Desktop')

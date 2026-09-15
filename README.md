@@ -4,7 +4,7 @@
 
 Entwickelt von der **IDO GmbH**, Anderslebener Str. 40, 39387 Oschersleben.
 
-Zwei Dateien, die zusammengehören und im **selben Ordner** liegen müssen:
+Drei Dateien, die zusammengehören und im **selben Ordner** liegen müssen:
 
 | Datei | Zweck |
 |---|---|
@@ -12,9 +12,15 @@ Zwei Dateien, die zusammengehören und im **selben Ordner** liegen müssen:
 | **`Scan.bat`** | die eigentliche Scan-Funktion; läuft auch allein auf der Kommandozeile und wird vom Fenster aufgerufen |
 | **`Diagnose.bat`** | prüft bei Problemen Dienst, Treiber, Gerät und belegende Programme und schreibt einen Bericht auf den Desktop |
 
-Beides sind reine Bordmittel-Lösungen: Windows-Bilderfassung (WIA) und Windows
-PowerShell, keine Zusatzsoftware, keine Installation. Das Ergebnis landet
-standardmäßig als mehrseitige PDF-Datei unter **Eigene Dokumente\Scans**.
+Beide laufen mit Bordmitteln: Windows-Bilderfassung (WIA) und Windows
+PowerShell, ohne Installation. Das Ergebnis landet standardmäßig als
+mehrseitige PDF-Datei unter **Eigene Dokumente\Scans**.
+
+> **Für beidseitiges Scannen am DR-C240 wird zusätzlich [NAPS2](https://www.naps2.com)
+> gebraucht** (kostenlos, deutschsprachig). Der Canon-WIA-Treiber nimmt die
+> Duplex-Einstellung von außen nicht an; NAPS2 spricht denselben Scanner über
+> **TWAIN** an, und darüber funktioniert es. Einseitig scannt das Programm auch
+> ohne NAPS2. Siehe [Beidseitig scannen über NAPS2](#beidseitig-scannen-über-naps2).
 
 ---
 
@@ -93,12 +99,25 @@ Fenster nach unten auf und zeigt:
 
 | Bereich | Inhalt |
 |---|---|
-| Gerät und Qualität | Scannerauswahl, *Suchen*, Farbmodus, Auflösung |
+| Gerät und Qualität | Scannerauswahl, *Suchen*, Farbmodus, Auflösung, **Scanweg** |
 | Ablage | **Zielordner**, Dateiname, Namensvorschau, „Ergebnis öffnen" |
 | Nachbearbeitung | schräge Seiten gerade richten, leere Seiten weglassen |
 | Anzeige | Kachel unten rechts ein- oder ausschalten |
 | Protokoll | vollständige Ausgabe des letzten Scans |
 | Schaltflächen | Verknüpfung auf dem Desktop, Kennwort ändern, Service schließen |
+
+**Scanweg** entscheidet, worüber gescannt wird:
+
+| Einstellung | Wirkung |
+|---|---|
+| *Automatisch* (Standard) | beidseitige Scans über NAPS2, einseitige über Windows — ist NAPS2 nicht installiert, immer über Windows |
+| *NAPS2 (TWAIN)* | immer über NAPS2 |
+| *Windows (WIA)* | immer über die Windows-Bilderfassung, NAPS2 bleibt außen vor |
+
+Rechts daneben steht im Klartext, was die Auswahl gerade bedeutet — und ob
+NAPS2 auf diesem Rechner überhaupt gefunden wurde. Nach dem Nachinstallieren
+von NAPS2 genügt ein Klick auf *Suchen*, dann sucht das Programm auch NAPS2
+erneut.
 
 Wird das Fenster geschlossen, ist der Servicebereich wieder gesperrt — beim
 nächsten Öffnen fragt das Programm erneut nach dem Kennwort.
@@ -123,8 +142,8 @@ im Servicebereich.
 
 ## Wo die Einstellungen liegen
 
-Zielordner, Format, Farbe, Auflösung, Duplex, Dateiname, Scannerauswahl sowie
-Sichtbarkeit und Position der Kachel werden gespeichert — bevorzugt als `einstellungen.json` **neben `Scanner.bat`**.
+Zielordner, Format, Farbe, Auflösung, Duplex, Dateiname, Scannerauswahl,
+Scanweg sowie Sichtbarkeit und Position der Kachel werden gespeichert — bevorzugt als `einstellungen.json` **neben `Scanner.bat`**.
 Damit gilt Ihre Einrichtung für **jeden Benutzer des Rechners**. Ist der
 Programmordner schreibgeschützt, weicht das Programm auf
 `%APPDATA%\Scan-DR-C240\einstellungen.json` aus (dann gilt sie nur für den
@@ -198,6 +217,12 @@ Scan.bat [Optionen]
 | `/farbe` `/grau` `/sw` | Farbe (Standard), Graustufen, Schwarzweiß |
 | `/dpi <Zahl>` | Auflösung, z. B. `150`, `200`, `300`, `400`, `600` |
 | `/duplex` | Vorder- und Rückseite scannen |
+| `/naps2` | über NAPS2 scannen (TWAIN — der Weg, über den Duplex am DR-C240 geht) |
+| `/wia` | über die Windows-Bilderfassung scannen |
+| `/naps2pfad <Pfad>` | `NAPS2.Console.exe` von Hand angeben |
+| `/treiber <Name>` | Treiber für NAPS2: `twain` (Standard), `wia`, `escl` |
+| `/profil <Name>` | ein in NAPS2 angelegtes Profil verwenden |
+| `/seite <Größe>` | Vorlagengröße für NAPS2, z. B. `a4`, `letter`, `legal` |
 | `/dialog` | vor dem Scan die Einstellungen des Scanner-Treibers zeigen |
 | `/einfach` | ohne eigene Geräteeinstellungen scannen (bei Treiberfehlern) |
 | `/duplexwert <n>` | Duplex-Schreibweise fest vorgeben (`1`, `4` oder `5`) |
@@ -223,7 +248,13 @@ Scan.bat /duplex /grau /dpi 200 /name Rechnung    Rechnung beidseitig in Graustu
 Scan.bat /jpg /dpi 600 /ordner "D:\Archiv"        Einzelbilder in hoher Auflösung
 Scan.bat /sw /dpi 200 /name Vertrag               Textvorlage klein und kontrastreich
 Scan.bat /liste                                   angeschlossene Scanner anzeigen
+Scan.bat /duplex /naps2                           beidseitig über NAPS2 (TWAIN)
+Scan.bat /wia /jpg                                bewusst über Windows, ohne NAPS2
 ```
+
+Ohne `/naps2` oder `/wia` entscheidet das Programm selbst: **mit `/duplex` und
+vorhandenem NAPS2 über NAPS2**, sonst über die Windows-Bilderfassung. Es sagt in
+der Ausgabe, welchen Weg es genommen hat.
 
 Bei mehreren Seiten und Bildformaten (`/jpg`, `/png`, `/tif`) landen die Seiten
 in einem Unterordner `Name_Zeitstempel\Name_001.jpg`, `…_002.jpg` usw.; eine
@@ -290,6 +321,8 @@ Bildpunkte nicht.
   Gerät muss im Geräte-Manager unter *Bildverarbeitungsgeräte* erscheinen
 * Dienst *Windows-Bilderfassung (WIA)* läuft (Standard bei Windows)
 * `Scanner.bat` und `Scan.bat` im selben Ordner
+* **für beidseitiges Scannen:** [NAPS2](https://www.naps2.com) installiert
+  (kostenlos) — das Programm findet es von allein
 
 ## Problembehandlung
 
@@ -419,7 +452,70 @@ Seitenzahl im PDF zeigt dann, ob der Treiber beidseitig liefert.
 
 Nimmt der Treiber gar keine an, bleibt beidseitiges Scannen über die
 Canon-Treibereinstellung oder CaptureOnTouch möglich — über WIA geht es bei
-diesem Gerät dann nicht.
+diesem Gerät dann nicht. **Der saubere Ausweg ist NAPS2**, siehe nächster
+Abschnitt.
+
+## Beidseitig scannen über NAPS2
+
+Der Canon-WIA-Treiber nimmt die Duplex-Einstellung von außen nicht an: Das
+Blatt wird eingezogen, aber kein Bild herausgegeben, und es kommt `0x8000FFFF`
+oder `0x80004005`. Alle WIA-Schreibweisen (`1`, `4`, `5`, `13`), beide Stellen
+der Eigenschaft und auch das mehrseitige TIFF ändern daran nichts — bei Brother
+und HP funktioniert derselbe Weg dagegen anstandslos.
+
+Canons eigene Software kann es, weil sie den Scanner nicht über WIA, sondern
+über **TWAIN** anspricht. Genau das macht **NAPS2** auch — und NAPS2 bringt eine
+Kommandozeile mit, über die dieses Programm es fernsteuern kann.
+
+### Einrichten
+
+1. [NAPS2](https://www.naps2.com) herunterladen und installieren (kostenlos,
+   deutschsprachig, Installer oder portable Fassung).
+2. `Scanner.bat` starten, Servicebereich öffnen und bei **Scanweg**
+   *Automatisch* stehen lassen (oder fest auf *NAPS2 (TWAIN)* stellen).
+3. Fertig. Der Hinweis neben der Auswahl bestätigt, dass NAPS2 gefunden wurde.
+
+Gesucht wird NAPS2 in dieser Reihenfolge: `Programme\NAPS2`,
+`Programme (x86)\NAPS2`, `%LOCALAPPDATA%\Programs\NAPS2`, `%ProgramData%\NAPS2`,
+**neben `Scan.bat`** (für die portable Fassung genügt es, den NAPS2-Ordner
+danebenzulegen), die Liste der installierten Programme in der Registrierung und
+zuletzt der Suchpfad. Liegt es woanders, hilft `/naps2pfad`:
+
+```
+Scan.bat /duplex /naps2pfad "D:\Werkzeuge\NAPS2\NAPS2.Console.exe"
+```
+
+### Was das Programm dann tut
+
+Es ruft `NAPS2.Console.exe` mit `--driver twain` und `--source duplex` auf,
+lässt jede Seite einzeln als JPEG ablegen (`--split`) und übernimmt die Bilder
+anschließend unverändert in die eigene Nachbearbeitung. **Leerseitenerkennung,
+Geraderichten, PDF-Erzeugung, Dateiname und Zielordner bleiben also genau
+gleich** — NAPS2 liefert nur die Rohseiten, alles andere macht weiterhin
+`Scan.bat`. Auflösung, Farbmodus und JPEG-Qualität werden mit durchgereicht.
+
+Ein in NAPS2 angelegtes Profil lässt sich ebenfalls verwenden — praktisch, wenn
+dort Sondereinstellungen hinterlegt sind:
+
+```
+Scan.bat /naps2 /profil "DR-C240 Duplex"
+```
+
+### Prüfen, ob es klappt
+
+```
+Diagnose.bat /naps2
+```
+
+listet die Geräte auf, die NAPS2 über TWAIN sieht. Steht der DR-C240 dabei, ist
+alles bereit. `Diagnose.bat` allein prüft in Abschnitt 10 ohnehin mit, ob NAPS2
+installiert ist und wo.
+
+### Wenn NAPS2 nicht da ist
+
+Ohne NAPS2 scannt das Programm weiter über Windows — einseitig ohne
+Einschränkung. Bei *Scanweg = NAPS2 (TWAIN)* und fehlendem NAPS2 bricht
+`Scan.bat` mit Rückgabewert `7` ab und sagt, wo es NAPS2 gesucht hat.
 
 **„Der Scanvorgang ist fehlgeschlagen“ / Scanner reagiert nicht**
 Eine andere Anwendung belegt das Gerät (siehe oben), oder das Gerät hängt:
@@ -467,6 +563,9 @@ betroffen.
 5. installierte Treiberarten (TWAIN-Quellen, Canon-Software)
 6. **Programme, die den Scanner belegen**
 7. Verbindungstest mit Fähigkeiten, Papierstatus und Bildformaten
+8. Testscan (nur mit `/scan`)
+9. Duplex-Test (nur mit `/duplextest`)
+10. **NAPS2** — ist es installiert, wo liegt es, welche Geräte meldet es
 
 Am Ende steht eine Bewertung im Klartext, was zu tun ist. Der vollständige
 Bericht landet als Textdatei auf dem Desktop und lässt sich weitergeben.
@@ -477,6 +576,7 @@ Bericht landet als Textdatei auf dem Desktop und lässt sich weitergeben.
 | `Diagnose.bat /scan` | zusätzlich eine Testseite einziehen |
 | `Diagnose.bat /freigeben` | Programme beenden, die den Scanner belegen |
 | `Diagnose.bat /duplextest` | probiert aus, welche Duplex-Einstellung der Treiber annimmt |
+| `Diagnose.bat /naps2` | listet die Geräte auf, die NAPS2 über TWAIN sieht |
 
 ### Rückgabewerte
 
@@ -488,6 +588,7 @@ Bericht landet als Textdatei auf dem Desktop und lässt sich weitergeben.
 | 4 | kein Papier eingezogen |
 | 5 | Fehler während der Übertragung |
 | 6 | Zielordner oder Zieldatei nicht beschreibbar |
+| 7 | NAPS2 wurde nicht gefunden (bei `/naps2`) |
 | 9 | PowerShell nicht gefunden |
 
 Damit lässt sich der Aufruf auch in eigene Skripte oder in die Aufgabenplanung
@@ -519,11 +620,18 @@ sich abbrechen. Die Scan-Logik gibt es also nur einmal.
   `/Subject` mit dem Copyright der IDO GmbH sowie Erstellungsdatum und
   Zeitzone.
 
-* Der Scan läuft über **WIA** (`WIA.DeviceManager`); Einzug, Duplex, Farbmodus,
-  Auflösung und Scanbereich werden über die WIA-Eigenschaften gesetzt. Nach
+* Der Scan läuft wahlweise über **WIA** (`WIA.DeviceManager`) oder über
+  **NAPS2** (`NAPS2.Console.exe`, TWAIN). Bei WIA werden Einzug, Duplex,
+  Farbmodus, Auflösung und Scanbereich über die WIA-Eigenschaften gesetzt; nach
   einer Änderung der Auflösung wird der Scanbereich mitskaliert, damit die
   Seite nicht beschnitten wird.
-* Jede Seite wird einzeln übertragen, bis der Treiber „kein Papier“ meldet.
+* Bei WIA wird jede Seite einzeln übertragen, bis der Treiber „kein Papier“
+  meldet; liefert der Treiber beide Seiten eines Blattes in einem Transfer,
+  wird das mehrseitige TIFF aufgeteilt.
+* Bei NAPS2 legt `--split` jede Seite als eigene JPEG-Datei ab; die Dateien
+  werden nach Namen sortiert übernommen. Die Ausgabe von NAPS2 landet im
+  Protokoll, damit im Fehlerfall die Meldung des TWAIN-Treibers sichtbar ist.
+  Die Nachbearbeitung ist für beide Wege dieselbe.
 * Das PDF wird direkt geschrieben: Die JPEG-Daten der Seiten werden ohne
   erneutes Komprimieren als `DCTDecode`-Bilder eingebettet, die Seitengröße
   ergibt sich aus Pixelmaß und Auflösung (300 dpi, A4 → 595 × 842 pt).

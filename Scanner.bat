@@ -151,6 +151,7 @@ function Get-Einstellungen {
         Name      = 'Scan'
         Oeffnen   = $true
         Scanner   = ''
+        Scanweg   = 'auto'
         Gerade    = $false
         Leerseiten = $false
         Kachel    = $true
@@ -169,6 +170,8 @@ function Get-Einstellungen {
             $e.Oeffnen = [bool]$e.Oeffnen
             $e.Gerade     = [bool]$e.Gerade
             $e.Leerseiten = [bool]$e.Leerseiten
+            $e.Scanweg    = "$($e.Scanweg)".ToLowerInvariant()
+            if ($e.Scanweg -notin @('auto', 'naps2', 'wia')) { $e.Scanweg = 'auto' }
             $e.Kachel  = [bool]$e.Kachel
             $e.KachelX = [int]$e.KachelX
             $e.KachelY = [int]$e.KachelY
@@ -196,6 +199,52 @@ function Save-Einstellungen($e) {
 }
 
 # ---------------------------------------------------------------------------
+# NAPS2 suchen (dieselben Orte wie in Scan.bat). Das Ergebnis merken wir uns,
+# damit die Oberflaeche nicht bei jedem Zeichnen die Festplatte durchsucht.
+# ---------------------------------------------------------------------------
+$script:Naps2Pfad   = $null
+$script:Naps2Gesucht = $false
+
+function Get-Naps2Pfad([switch]$Neu) {
+    if ($script:Naps2Gesucht -and -not $Neu) { return $script:Naps2Pfad }
+    $script:Naps2Gesucht = $true
+    $script:Naps2Pfad    = $null
+
+    $orte = @()
+    foreach ($basis in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA, $env:ProgramData)) {
+        if (-not $basis) { continue }
+        $orte += [IO.Path]::Combine($basis, 'NAPS2', 'NAPS2.Console.exe')
+        $orte += [IO.Path]::Combine($basis, 'Programs', 'NAPS2', 'NAPS2.Console.exe')
+    }
+    $eigener = Split-Path -Parent $script:ScanBat
+    if ($eigener) {
+        $orte += [IO.Path]::Combine($eigener, 'NAPS2.Console.exe')
+        $orte += [IO.Path]::Combine($eigener, 'NAPS2', 'NAPS2.Console.exe')
+    }
+    foreach ($ort in $orte) {
+        if ($ort -and (Test-Path -LiteralPath $ort -PathType Leaf)) { $script:Naps2Pfad = $ort; return $ort }
+    }
+
+    try {
+        $schluessel = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*')
+        foreach ($eintrag in (Get-ItemProperty $schluessel -ErrorAction SilentlyContinue)) {
+            if ($eintrag.DisplayName -like 'NAPS2*' -and $eintrag.InstallLocation) {
+                $ort = [IO.Path]::Combine($eintrag.InstallLocation, 'NAPS2.Console.exe')
+                if (Test-Path -LiteralPath $ort -PathType Leaf) { $script:Naps2Pfad = $ort; return $ort }
+            }
+        }
+    } catch { }
+
+    try {
+        $imPfad = Get-Command 'NAPS2.Console.exe' -ErrorAction SilentlyContinue
+        if ($imPfad) { $script:Naps2Pfad = $imPfad.Source; return $script:Naps2Pfad }
+    } catch { }
+    return $null
+}
+
+# ---------------------------------------------------------------------------
 # Aufrufzeile fuer Scan.bat zusammenbauen
 # ---------------------------------------------------------------------------
 function New-ScanArgumente($e) {
@@ -206,6 +255,11 @@ function New-ScanArgumente($e) {
     if ($e.Duplex)     { $teile += '/duplex' }
     if ($e.Gerade)     { $teile += '/gerade' }
     if ($e.Leerseiten) { $teile += '/leerseiten' }
+    # Scanweg: 'auto' laesst Scan.bat entscheiden (bei Duplex NAPS2, sonst Windows)
+    switch ("$($e.Scanweg)".ToLowerInvariant()) {
+        'naps2' { $teile += '/naps2' }
+        'wia'   { $teile += '/wia' }
+    }
     if ($e.Oeffnen) { $teile += '/oeffnen' }
     if ("$($e.Name)".Trim())    { $teile += '/name';    $teile += ('"' + "$($e.Name)".Trim() + '"') }
     if ("$($e.Ziel)".Trim())    { $teile += '/ordner';  $teile += ('"' + "$($e.Ziel)".Trim() + '"') }
@@ -392,11 +446,11 @@ Add-Type -AssemblyName System.Drawing
 $e = Get-Einstellungen
 
 $script:HoeheKunde   = 330
-$script:HoeheService = 744
+$script:HoeheService = 778
 try {
     # auf kleinen Bildschirmen kuerzen; der Servicebereich bekommt dann eine Bildlaufleiste
     $platz = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height - 70
-    if ($script:HoeheService -gt $platz) { $script:HoeheService = [Math]::Max(430, $platz) }
+    if ($script:HoeheService -gt $platz) { $script:HoeheService = [Math]::Max(464, $platz) }
 } catch { }
 
 $firmenBlau = [System.Drawing.Color]::FromArgb(43, 74, 155)
@@ -572,7 +626,7 @@ $form.Controls.Add($lblLinie2)
 # ===========================================================================
 $pnlService          = New-Object System.Windows.Forms.Panel
 $pnlService.Location = New-Object System.Drawing.Point(0, 296)
-$pnlService.Size     = New-Object System.Drawing.Size(620, 410)
+$pnlService.Size     = New-Object System.Drawing.Size(620, 444)
 $pnlService.Visible  = $false
 
 $lblService          = New-Object System.Windows.Forms.Label
@@ -586,7 +640,7 @@ $lblService.ForeColor = $firmenBlau
 $grpGeraet          = New-Object System.Windows.Forms.GroupBox
 $grpGeraet.Text     = ' Gerät und Qualität '
 $grpGeraet.Location = New-Object System.Drawing.Point(18, 28)
-$grpGeraet.Size     = New-Object System.Drawing.Size(584, 92)
+$grpGeraet.Size     = New-Object System.Drawing.Size(584, 126)
 
 $lblGeraet          = New-Object System.Windows.Forms.Label
 $lblGeraet.Text     = 'Scanner:'
@@ -635,13 +689,31 @@ $lblDpiEinheit.Text     = 'dpi'
 $lblDpiEinheit.Location = New-Object System.Drawing.Point(367, 60)
 $lblDpiEinheit.AutoSize = $true
 
+# Scanweg: ueber welche Schnittstelle gescannt wird. NAPS2 spricht den Scanner
+# ueber TWAIN an - das ist der Weg, der beim Canon DR-C240 auch beidseitig geht.
+$lblWeg          = New-Object System.Windows.Forms.Label
+$lblWeg.Text     = 'Scanweg:'
+$lblWeg.Location = New-Object System.Drawing.Point(15, 94)
+$lblWeg.AutoSize = $true
+
+$cmbWeg          = New-Object System.Windows.Forms.ComboBox
+$cmbWeg.Location = New-Object System.Drawing.Point(88, 90)
+$cmbWeg.Size     = New-Object System.Drawing.Size(160, 24)
+$cmbWeg.DropDownStyle = 'DropDownList'
+[void]$cmbWeg.Items.AddRange(@('Automatisch', 'NAPS2 (TWAIN)', 'Windows (WIA)'))
+
+$lblWegHinweis           = New-Object System.Windows.Forms.Label
+$lblWegHinweis.Location  = New-Object System.Drawing.Point(258, 94)
+$lblWegHinweis.Size      = New-Object System.Drawing.Size(310, 20)
+$lblWegHinweis.ForeColor = [System.Drawing.Color]::DimGray
+
 $grpGeraet.Controls.AddRange(@($lblGeraet, $cmbGeraet, $btnAktual, $btnTreiber, $lblFarbe, $cmbFarbe,
-                               $lblDpi, $cmbDpi, $lblDpiEinheit))
+                               $lblDpi, $cmbDpi, $lblDpiEinheit, $lblWeg, $cmbWeg, $lblWegHinweis))
 
 # --- Ablage -----------------------------------------------------------------
 $grpAblage          = New-Object System.Windows.Forms.GroupBox
 $grpAblage.Text     = ' Ablage '
-$grpAblage.Location = New-Object System.Drawing.Point(18, 128)
+$grpAblage.Location = New-Object System.Drawing.Point(18, 162)
 $grpAblage.Size     = New-Object System.Drawing.Size(584, 116)
 
 $lblZiel          = New-Object System.Windows.Forms.Label
@@ -682,26 +754,26 @@ $grpAblage.Controls.AddRange(@($lblZiel, $txtZiel, $btnZiel, $lblName, $txtName,
 # --- Protokoll --------------------------------------------------------------
 $chkGerade          = New-Object System.Windows.Forms.CheckBox
 $chkGerade.Text     = 'Schräg eingezogene Seiten gerade richten'
-$chkGerade.Location = New-Object System.Drawing.Point(18, 246)
+$chkGerade.Location = New-Object System.Drawing.Point(18, 280)
 $chkGerade.AutoSize = $true
 
 $chkLeer          = New-Object System.Windows.Forms.CheckBox
 $chkLeer.Text     = 'Leere Seiten weglassen'
-$chkLeer.Location = New-Object System.Drawing.Point(300, 246)
+$chkLeer.Location = New-Object System.Drawing.Point(300, 280)
 $chkLeer.AutoSize = $true
 
 $chkKachel          = New-Object System.Windows.Forms.CheckBox
 $chkKachel.Text     = 'Kleines Fenster unten rechts anzeigen (immer im Vordergrund)'
-$chkKachel.Location = New-Object System.Drawing.Point(18, 270)
+$chkKachel.Location = New-Object System.Drawing.Point(18, 304)
 $chkKachel.AutoSize = $true
 
 $lblProt          = New-Object System.Windows.Forms.Label
 $lblProt.Text     = 'Protokoll:'
-$lblProt.Location = New-Object System.Drawing.Point(18, 296)
+$lblProt.Location = New-Object System.Drawing.Point(18, 330)
 $lblProt.AutoSize = $true
 
 $txtLog            = New-Object System.Windows.Forms.TextBox
-$txtLog.Location   = New-Object System.Drawing.Point(18, 316)
+$txtLog.Location   = New-Object System.Drawing.Point(18, 350)
 $txtLog.Size       = New-Object System.Drawing.Size(584, 52)
 $txtLog.Multiline  = $true
 $txtLog.ReadOnly   = $true
@@ -711,22 +783,22 @@ $txtLog.Font       = New-Object System.Drawing.Font('Consolas', 9)
 
 $btnLink          = New-Object System.Windows.Forms.Button
 $btnLink.Text     = 'Verknüpfung'
-$btnLink.Location = New-Object System.Drawing.Point(18, 376)
+$btnLink.Location = New-Object System.Drawing.Point(18, 410)
 $btnLink.Size     = New-Object System.Drawing.Size(150, 26)
 
 $btnFrei          = New-Object System.Windows.Forms.Button
 $btnFrei.Text     = 'Scanner freigeben'
-$btnFrei.Location = New-Object System.Drawing.Point(176, 376)
+$btnFrei.Location = New-Object System.Drawing.Point(176, 410)
 $btnFrei.Size     = New-Object System.Drawing.Size(130, 26)
 
 $btnKennwort          = New-Object System.Windows.Forms.Button
 $btnKennwort.Text     = 'Kennwort ändern'
-$btnKennwort.Location = New-Object System.Drawing.Point(314, 376)
+$btnKennwort.Location = New-Object System.Drawing.Point(314, 410)
 $btnKennwort.Size     = New-Object System.Drawing.Size(140, 26)
 
 $btnServiceZu          = New-Object System.Windows.Forms.Button
 $btnServiceZu.Text     = 'Service schließen'
-$btnServiceZu.Location = New-Object System.Drawing.Point(462, 376)
+$btnServiceZu.Location = New-Object System.Drawing.Point(462, 410)
 $btnServiceZu.Size     = New-Object System.Drawing.Size(140, 26)
 
 $pnlService.Controls.AddRange(@($lblService, $grpGeraet, $grpAblage, $chkGerade, $chkLeer, $chkKachel,
@@ -852,6 +924,39 @@ function Setze-Status([string]$text) {
     try { $hinweis.SetToolTip($lblKachelStatus, $text) } catch { }
 }
 
+# Auswahlfeld 'Scanweg' <-> gespeicherter Wert
+function Lies-Scanweg {
+    switch ([string]$cmbWeg.SelectedItem) {
+        'NAPS2 (TWAIN)' { return 'naps2' }
+        'Windows (WIA)' { return 'wia' }
+        default         { return 'auto' }
+    }
+}
+
+function Zeige-Scanweg([string]$weg) {
+    switch ("$weg".ToLowerInvariant()) {
+        'naps2' { $cmbWeg.SelectedItem = 'NAPS2 (TWAIN)' }
+        'wia'   { $cmbWeg.SelectedItem = 'Windows (WIA)' }
+        default { $cmbWeg.SelectedItem = 'Automatisch' }
+    }
+    Aktualisiere-WegHinweis
+}
+
+# Kurzer Klartext neben der Auswahl - und ein Hinweis, wenn NAPS2 fehlt
+function Aktualisiere-WegHinweis {
+    switch ([string]$cmbWeg.SelectedItem) {
+        'NAPS2 (TWAIN)' {
+            if (Get-Naps2Pfad) { $lblWegHinweis.Text = 'immer über NAPS2 (TWAIN)' }
+            else               { $lblWegHinweis.Text = 'NAPS2 ist nicht installiert!' }
+        }
+        'Windows (WIA)' { $lblWegHinweis.Text = 'immer über Windows - kein Duplex am DR-C240' }
+        default {
+            if (Get-Naps2Pfad) { $lblWegHinweis.Text = 'Vorder- und Rückseite über NAPS2, sonst Windows' }
+            else               { $lblWegHinweis.Text = 'über Windows (NAPS2 ist nicht installiert)' }
+        }
+    }
+}
+
 function Lies-Oberflaeche {
     $bildart = 'jpg'
     if ($cmbBildart.SelectedItem) { $bildart = ([string]$cmbBildart.SelectedItem).ToLowerInvariant() }
@@ -887,6 +992,7 @@ function Lies-Oberflaeche {
         Name    = $txtName.Text
         Oeffnen = $chkOeffnen.Checked
         Scanner = [string]$cmbGeraet.SelectedItem
+        Scanweg = (Lies-Scanweg)
         Kachel  = $chkKachel.Checked
         KachelX = $kx
         KachelY = $ky
@@ -989,11 +1095,11 @@ function Zeige-Service([bool]$sichtbar) {
         $form.ClientSize = New-Object System.Drawing.Size(620, $script:HoeheService)
         # auf niedrigen Bildschirmen bekommt der Servicebereich eine Bildlaufleiste
         $platz = $script:HoeheService - $pnlService.Top - 28
-        if ($platz -lt 410) {
+        if ($platz -lt 444) {
             $pnlService.Height     = $platz
             $pnlService.AutoScroll = $true
         } else {
-            $pnlService.Height     = 410
+            $pnlService.Height     = 444
             $pnlService.AutoScroll = $false
         }
     } else {
@@ -1066,7 +1172,7 @@ if ($logoBild) { $picLogo.Add_DoubleClick({ Oeffne-Service }) } else { $lblLogo.
 
 $btnServiceZu.Add_Click({ Zeige-Service $false })
 
-$btnAktual.Add_Click({ Fuelle-Scannerliste })
+$btnAktual.Add_Click({ Fuelle-Scannerliste; [void](Get-Naps2Pfad -Neu); Aktualisiere-WegHinweis })
 
 $radPdf.Add_CheckedChanged({ Aktualisiere-Muster })
 $radBild.Add_CheckedChanged({ Aktualisiere-Muster })
@@ -1523,6 +1629,9 @@ switch ("$($e.Farbe)") {
 }
 $cmbDpi.SelectedItem = [string][int]$e.Dpi
 if ($null -eq $cmbDpi.SelectedItem) { $cmbDpi.SelectedItem = '300' }
+
+Zeige-Scanweg $e.Scanweg
+$cmbWeg.Add_SelectedIndexChanged({ Aktualisiere-WegHinweis })
 
 Aktualisiere-Muster
 Fuelle-Scannerliste
